@@ -153,6 +153,270 @@ upgrade_bot() {
     fi
 }
 
+# Function to configure the bot (creates/updates .env)
+configure_bot() {
+    local target_dir=$1
+    target_dir=${target_dir:-"/opt/vpn-bot"}
+
+    echo -e "${CYAN}${BOLD}"
+    echo "========================================================"
+    echo "    VPN Telegram Bot - Configuration Wizard            "
+    echo "========================================================"
+    echo -e "${NC}"
+
+    if [ ! -d "$target_dir" ]; then
+        error "No installation found at $target_dir. Cannot configure."
+        return 1
+    fi
+
+    # Load old config values if present to serve as wizard defaults
+    local DEF_BOT_TOKEN=""
+    local DEF_ADMIN_IDS=""
+    local DEF_CONNECT_MODE="DIRECT"
+    local DEF_PROXY_URL=""
+    local DEF_XRAY_CONFIG_URL=""
+    local DEF_XRAY_BIN="xray"
+    local DEF_XRAY_SOCKS_PORT="10808"
+    local DEF_DEFAULT_LANG="en"
+    local DEF_SUPPORT_CONTACT="@your_support"
+    local DEF_BRAND_NAME="My VPN"
+    local DEF_CARD_NUMBER="6037-9911-1111-1111"
+    local DEF_CARD_HOLDER="John Doe"
+    local DEF_FIAT_CURRENCY="IRR"
+    local DEF_STARS_ENABLED="true"
+    local DEF_CRYPTO_ENABLED="false"
+    local DEF_NOWPAYMENTS_API_KEY=""
+    local DEF_NOWPAYMENTS_IPN_SECRET=""
+    local DEF_PUBLIC_BASE_URL=""
+    local DEF_WEBHOOK_PORT="8080"
+
+    local old_env=""
+    if [ -f "$target_dir/.env" ]; then
+        old_env=$(cat "$target_dir/.env")
+    fi
+
+    if [ -n "$old_env" ]; then
+        info "Found existing configuration. Loading defaults..."
+        # Parse values safely
+        eval_var() {
+            local val=$(echo "$old_env" | grep "^$1=" | cut -d'=' -f2- | tr -d '\r')
+            echo "$val"
+        }
+        DEF_BOT_TOKEN=$(eval_var "BOT_TOKEN")
+        DEF_ADMIN_IDS=$(eval_var "ADMIN_IDS")
+        DEF_CONNECT_MODE=$(eval_var "CONNECT_MODE")
+        DEF_PROXY_URL=$(eval_var "PROXY_URL")
+        DEF_XRAY_CONFIG_URL=$(eval_var "XRAY_CONFIG_URL")
+        DEF_XRAY_BIN=$(eval_var "XRAY_BIN")
+        DEF_XRAY_SOCKS_PORT=$(eval_var "XRAY_SOCKS_PORT")
+        DEF_DEFAULT_LANG=$(eval_var "DEFAULT_LANG")
+        DEF_SUPPORT_CONTACT=$(eval_var "SUPPORT_CONTACT")
+        DEF_BRAND_NAME=$(eval_var "BRAND_NAME")
+        DEF_CARD_NUMBER=$(eval_var "CARD_NUMBER")
+        DEF_CARD_HOLDER=$(eval_var "CARD_HOLDER")
+        DEF_FIAT_CURRENCY=$(eval_var "FIAT_CURRENCY")
+        DEF_STARS_ENABLED=$(eval_var "STARS_ENABLED")
+        DEF_CRYPTO_ENABLED=$(eval_var "CRYPTO_ENABLED")
+        DEF_NOWPAYMENTS_API_KEY=$(eval_var "NOWPAYMENTS_API_KEY")
+        DEF_NOWPAYMENTS_IPN_SECRET=$(eval_var "NOWPAYMENTS_IPN_SECRET")
+        DEF_PUBLIC_BASE_URL=$(eval_var "PUBLIC_BASE_URL")
+        DEF_WEBHOOK_PORT=$(eval_var "WEBHOOK_PORT")
+    fi
+
+    # Run configuration prompts
+    echo -e "${YELLOW}Please enter configuration details (Press Enter to keep default/current):${NC}"
+    
+    local BOT_TOKEN=""
+    while [ -z "$BOT_TOKEN" ]; do
+        read -p "Telegram Bot Token [$DEF_BOT_TOKEN]: " BOT_TOKEN
+        BOT_TOKEN=${BOT_TOKEN:-$DEF_BOT_TOKEN}
+        if [ -z "$BOT_TOKEN" ]; then
+            error "Bot Token is required!"
+        fi
+    done
+
+    local ADMIN_IDS=""
+    while [ -z "$ADMIN_IDS" ]; do
+        read -p "Admin Telegram IDs (comma-separated, e.g. 12345,67890) [$DEF_ADMIN_IDS]: " ADMIN_IDS
+        ADMIN_IDS=${ADMIN_IDS:-$DEF_ADMIN_IDS}
+        if [ -z "$ADMIN_IDS" ]; then
+            error "At least one Admin ID is required!"
+        fi
+    done
+
+    local DEFAULT_LANG=""
+    read -p "Default Bot Language (en/fa) [$DEF_DEFAULT_LANG]: " DEFAULT_LANG
+    DEFAULT_LANG=${DEFAULT_LANG:-$DEF_DEFAULT_LANG}
+
+    local SUPPORT_CONTACT=""
+    read -p "Support Contact Username (e.g. @my_support) [$DEF_SUPPORT_CONTACT]: " SUPPORT_CONTACT
+    SUPPORT_CONTACT=${SUPPORT_CONTACT:-$DEF_SUPPORT_CONTACT}
+
+    local BRAND_NAME=""
+    read -p "Brand Name (shown in bot UI) [$DEF_BRAND_NAME]: " BRAND_NAME
+    BRAND_NAME=${BRAND_NAME:-$DEF_BRAND_NAME}
+
+    local CARD_NUMBER=""
+    read -p "Card Number for Payments [$DEF_CARD_NUMBER]: " CARD_NUMBER
+    CARD_NUMBER=${CARD_NUMBER:-$DEF_CARD_NUMBER}
+
+    local CARD_HOLDER=""
+    read -p "Card Holder Name [$DEF_CARD_HOLDER]: " CARD_HOLDER
+    CARD_HOLDER=${CARD_HOLDER:-$DEF_CARD_HOLDER}
+
+    local FIAT_CURRENCY=""
+    read -p "Currency Label (e.g. IRR, USD, EUR) [$DEF_FIAT_CURRENCY]: " FIAT_CURRENCY
+    FIAT_CURRENCY=${FIAT_CURRENCY:-$DEF_FIAT_CURRENCY}
+
+    # Connection Mode configuration
+    echo ""
+    echo "Telegram Connection Mode:"
+    echo "1) DIRECT (Direct connection to Telegram API)"
+    echo "2) PROXY (Route requests through HTTP/Socks5 proxy)"
+    echo "3) XRAY (Route requests through local xray-core client)"
+    local CONN_CHOICE=""
+    read -p "Select Mode (1-3) [DIRECT]: " CONN_CHOICE
+    
+    local CONNECT_MODE="DIRECT"
+    local PROXY_URL=""
+    local XRAY_CONFIG_URL=""
+    local XRAY_BIN=""
+    local XRAY_SOCKS_PORT=""
+    if [ "$CONN_CHOICE" = "2" ] || [ "$DEF_CONNECT_MODE" = "PROXY" -a -z "$CONN_CHOICE" ]; then
+        CONNECT_MODE="PROXY"
+        read -p "Proxy URL (e.g. socks5://127.0.0.1:1080) [$DEF_PROXY_URL]: " PROXY_URL
+        PROXY_URL=${PROXY_URL:-$DEF_PROXY_URL}
+    elif [ "$CONN_CHOICE" = "3" ] || [ "$DEF_CONNECT_MODE" = "XRAY" -a -z "$CONN_CHOICE" ]; then
+        CONNECT_MODE="XRAY"
+        read -p "Xray Link Config URL (vless/vmess/trojan/ss) [$DEF_XRAY_CONFIG_URL]: " XRAY_CONFIG_URL
+        XRAY_CONFIG_URL=${XRAY_CONFIG_URL:-$DEF_XRAY_CONFIG_URL}
+        
+        # Check if xray is on system
+        if ! command -v xray &>/dev/null && [ ! -f "/usr/local/bin/xray" ]; then
+            warn "xray-core binary not found."
+            local AUTO_XRAY=""
+            read -p "Would you like to automatically download and install official xray-core? (Y/n): " AUTO_XRAY
+            AUTO_XRAY=${AUTO_XRAY:-"Y"}
+            if [[ "$AUTO_XRAY" =~ ^[Yy]$ ]]; then
+                info "Detecting CPU architecture..."
+                local ARCH=$(uname -m)
+                local XRAY_ARCH=""
+                if [ "$ARCH" = "x86_64" ]; then
+                    XRAY_ARCH="64"
+                elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+                    XRAY_ARCH="arm64-v8a"
+                else
+                    XRAY_ARCH="32"
+                fi
+                
+                # Fetch latest release binary URL
+                local LATEST_XRAY_URL=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep "browser_download_url" | grep "linux-${XRAY_ARCH}.zip" | head -n 1 | cut -d '"' -f 4)
+                if [ -n "$LATEST_XRAY_URL" ]; then
+                    info "Downloading Xray-core..."
+                    curl -L -o /tmp/xray.zip "$LATEST_XRAY_URL"
+                    mkdir -p /tmp/xray_extract
+                    unzip -q /tmp/xray.zip -d /tmp/xray_extract
+                    mv /tmp/xray_extract/xray /usr/local/bin/xray
+                    chmod +x /usr/local/bin/xray
+                    rm -rf /tmp/xray.zip /tmp/xray_extract
+                    success "Xray-core installed successfully to /usr/local/bin/xray"
+                    XRAY_BIN="/usr/local/bin/xray"
+                else
+                    error "Could not fetch Xray-core release. Please install it manually and set XRAY_BIN."
+                    XRAY_BIN="xray"
+                fi
+            else
+                XRAY_BIN="xray"
+            fi
+        else
+            XRAY_BIN="xray"
+        fi
+        
+        read -p "Xray local SOCKS port [$DEF_XRAY_SOCKS_PORT]: " XRAY_SOCKS_PORT
+        XRAY_SOCKS_PORT=${XRAY_SOCKS_PORT:-$DEF_XRAY_SOCKS_PORT}
+    fi
+
+    # Crypto payment configuration
+    local CRYPTO_CHOICE=""
+    read -p "Enable NowPayments Crypto Payments? (y/N) [$DEF_CRYPTO_ENABLED]: " CRYPTO_CHOICE
+    CRYPTO_CHOICE=${CRYPTO_CHOICE:-$DEF_CRYPTO_ENABLED}
+    
+    local CRYPTO_ENABLED="false"
+    local NOWPAYMENTS_API_KEY=""
+    local NOWPAYMENTS_IPN_SECRET=""
+    local PUBLIC_BASE_URL=""
+    if [[ "$CRYPTO_CHOICE" =~ ^[Yy]$ || "$CRYPTO_CHOICE" = "true" ]]; then
+        CRYPTO_ENABLED="true"
+        read -p "NowPayments API Key [$DEF_NOWPAYMENTS_API_KEY]: " NOWPAYMENTS_API_KEY
+        NOWPAYMENTS_API_KEY=${NOWPAYMENTS_API_KEY:-$DEF_NOWPAYMENTS_API_KEY}
+        
+        read -p "NowPayments IPN Secret [$DEF_NOWPAYMENTS_IPN_SECRET]: " NOWPAYMENTS_IPN_SECRET
+        NOWPAYMENTS_IPN_SECRET=${NOWPAYMENTS_IPN_SECRET:-$DEF_NOWPAYMENTS_IPN_SECRET}
+        
+        read -p "Public Domain URL for IPN callbacks (e.g. https://bot.yourdomain.com) [$DEF_PUBLIC_BASE_URL]: " PUBLIC_BASE_URL
+        PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-$DEF_PUBLIC_BASE_URL}
+    fi
+
+    local WEBHOOK_PORT=""
+    read -p "Webhook/IPN Local Bind Port [8080]: " WEBHOOK_PORT
+    WEBHOOK_PORT=${WEBHOOK_PORT:-$DEF_WEBHOOK_PORT}
+
+    # Save to .env file
+    info "Creating/updating .env configuration file..."
+    cat << EOF > "$target_dir/.env"
+BOT_TOKEN=$BOT_TOKEN
+ADMIN_IDS=$ADMIN_IDS
+CONNECT_MODE=$CONNECT_MODE
+PROXY_MODE=OFF
+PROXY_URL=$PROXY_URL
+XRAY_CONFIG_URL=$XRAY_CONFIG_URL
+XRAY_BIN=${XRAY_BIN:-"xray"}
+XRAY_SOCKS_PORT=${XRAY_SOCKS_PORT:-"10808"}
+DATABASE_URL=sqlite+aiosqlite:///$target_dir/vpnbot.db
+DEFAULT_LANG=$DEFAULT_LANG
+SUPPORT_CONTACT=$SUPPORT_CONTACT
+BRAND_NAME=$BRAND_NAME
+CARD_NUMBER=$CARD_NUMBER
+CARD_HOLDER=$CARD_HOLDER
+FIAT_CURRENCY=$FIAT_CURRENCY
+STARS_ENABLED=true
+CRYPTO_ENABLED=$CRYPTO_ENABLED
+NOWPAYMENTS_API_KEY=$NOWPAYMENTS_API_KEY
+NOWPAYMENTS_IPN_SECRET=$NOWPAYMENTS_IPN_SECRET
+PUBLIC_BASE_URL=$PUBLIC_BASE_URL
+WEBHOOK_HOST=127.0.0.1
+WEBHOOK_PORT=$WEBHOOK_PORT
+EOF
+
+    # Fix directory permissions
+    if id "vpnbot" &>/dev/null; then
+        chown -R vpnbot:vpnbot "$target_dir"
+    fi
+    chmod -R 750 "$target_dir"
+    if [ -f "$target_dir/vpnbot.db" ]; then
+        if id "vpnbot" &>/dev/null; then
+            chown vpnbot:vpnbot "$target_dir/vpnbot.db"
+        fi
+        chmod 660 "$target_dir/vpnbot.db"
+    fi
+
+    success "Configuration file .env successfully updated."
+
+    # If the systemd service exists, restart it and check status
+    if systemctl list-unit-files | grep -q "vpn-bot.service"; then
+        info "Restarting vpn-bot service to apply new configuration..."
+        systemctl daemon-reload
+        systemctl restart vpn-bot
+        sleep 3
+        if systemctl is-active --quiet vpn-bot; then
+            success "vpn-bot service is active and running with new configuration!"
+        else
+            error "vpn-bot service failed to start. Run 'journalctl -u vpn-bot' for logs."
+            return 1
+        fi
+    fi
+}
+
 # Function to run installation
 install_bot() {
     echo -e "${CYAN}${BOLD}"
@@ -245,10 +509,12 @@ install_bot() {
                 cp "$INSTALL_DIR/vpnbot.db" "$DB_BACKUP_TEMP"
             fi
             
-            # We keep the old .env if it exists
-            OLD_ENV=""
+            # Backup environment configuration if it exists
+            ENV_BACKUP_TEMP=""
             if [ -f "$INSTALL_DIR/.env" ]; then
-                OLD_ENV=$(cat "$INSTALL_DIR/.env")
+                warn "Creating temporary environment backup..."
+                ENV_BACKUP_TEMP="/tmp/vpnbot_env_$(date +%s).bak"
+                cp "$INSTALL_DIR/.env" "$ENV_BACKUP_TEMP"
             fi
             info "Removing existing files..."
             rm -rf "$INSTALL_DIR"
@@ -270,6 +536,13 @@ install_bot() {
         info "Restoring database backup..."
         cp "$DB_BACKUP_TEMP" "$INSTALL_DIR/vpnbot.db"
         rm -f "$DB_BACKUP_TEMP"
+    fi
+
+    # Restore environment configuration if backup existed
+    if [ -n "$ENV_BACKUP_TEMP" ] && [ -f "$ENV_BACKUP_TEMP" ]; then
+        info "Restoring environment configuration backup..."
+        cp "$ENV_BACKUP_TEMP" "$INSTALL_DIR/.env"
+        rm -f "$ENV_BACKUP_TEMP"
     fi
 
     # Ensure crucial files exist
@@ -302,206 +575,14 @@ install_bot() {
     pip install -r "$INSTALL_DIR/requirements.txt"
 
     # 6. Configuration Variables Wizard (.env)
-    # Load old config values if present to serve as wizard defaults
-    DEF_BOT_TOKEN=""
-    DEF_ADMIN_IDS=""
-    DEF_CONNECT_MODE="DIRECT"
-    DEF_PROXY_URL=""
-    DEF_XRAY_CONFIG_URL=""
-    DEF_XRAY_BIN="xray"
-    DEF_XRAY_SOCKS_PORT="10808"
-    DEF_DEFAULT_LANG="en"
-    DEF_SUPPORT_CONTACT="@your_support"
-    DEF_BRAND_NAME="My VPN"
-    DEF_CARD_NUMBER="6037-9911-1111-1111"
-    DEF_CARD_HOLDER="John Doe"
-    DEF_FIAT_CURRENCY="IRR"
-    DEF_STARS_ENABLED="true"
-    DEF_CRYPTO_ENABLED="false"
-    DEF_NOWPAYMENTS_API_KEY=""
-    DEF_NOWPAYMENTS_IPN_SECRET=""
-    DEF_PUBLIC_BASE_URL=""
-    DEF_WEBHOOK_PORT="8080"
+    configure_bot "$INSTALL_DIR"
 
-    if [ -n "$OLD_ENV" ]; then
-        info "Found existing configuration. Loading defaults..."
-        # Parse values safely
-        eval_var() {
-            local val=$(echo "$OLD_ENV" | grep "^$1=" | cut -d'=' -f2- | tr -d '\r')
-            echo "$val"
-        }
-        DEF_BOT_TOKEN=$(eval_var "BOT_TOKEN")
-        DEF_ADMIN_IDS=$(eval_var "ADMIN_IDS")
-        DEF_CONNECT_MODE=$(eval_var "CONNECT_MODE")
-        DEF_PROXY_URL=$(eval_var "PROXY_URL")
-        DEF_XRAY_CONFIG_URL=$(eval_var "XRAY_CONFIG_URL")
-        DEF_XRAY_BIN=$(eval_var "XRAY_BIN")
-        DEF_XRAY_SOCKS_PORT=$(eval_var "XRAY_SOCKS_PORT")
-        DEF_DEFAULT_LANG=$(eval_var "DEFAULT_LANG")
-        DEF_SUPPORT_CONTACT=$(eval_var "SUPPORT_CONTACT")
-        DEF_BRAND_NAME=$(eval_var "BRAND_NAME")
-        DEF_CARD_NUMBER=$(eval_var "CARD_NUMBER")
-        DEF_CARD_HOLDER=$(eval_var "CARD_HOLDER")
-        DEF_FIAT_CURRENCY=$(eval_var "FIAT_CURRENCY")
-        DEF_STARS_ENABLED=$(eval_var "STARS_ENABLED")
-        DEF_CRYPTO_ENABLED=$(eval_var "CRYPTO_ENABLED")
-        DEF_NOWPAYMENTS_API_KEY=$(eval_var "NOWPAYMENTS_API_KEY")
-        DEF_NOWPAYMENTS_IPN_SECRET=$(eval_var "NOWPAYMENTS_IPN_SECRET")
-        DEF_PUBLIC_BASE_URL=$(eval_var "PUBLIC_BASE_URL")
-        DEF_WEBHOOK_PORT=$(eval_var "WEBHOOK_PORT")
-    fi
-
-    # Run configuration prompts
-    echo -e "${YELLOW}Please enter configuration details (Press Enter to keep default/current):${NC}"
-    
-    while [ -z "$BOT_TOKEN" ]; do
-        read -p "Telegram Bot Token [$DEF_BOT_TOKEN]: " BOT_TOKEN
-        BOT_TOKEN=${BOT_TOKEN:-$DEF_BOT_TOKEN}
-        if [ -z "$BOT_TOKEN" ]; then
-            error "Bot Token is required!"
-        fi
-    done
-
-    while [ -z "$ADMIN_IDS" ]; do
-        read -p "Admin Telegram IDs (comma-separated, e.g. 12345,67890) [$DEF_ADMIN_IDS]: " ADMIN_IDS
-        ADMIN_IDS=${ADMIN_IDS:-$DEF_ADMIN_IDS}
-        if [ -z "$ADMIN_IDS" ]; then
-            error "At least one Admin ID is required!"
-        fi
-    done
-
-    read -p "Default Bot Language (en/fa) [$DEF_DEFAULT_LANG]: " DEFAULT_LANG
-    DEFAULT_LANG=${DEFAULT_LANG:-$DEF_DEFAULT_LANG}
-
-    read -p "Support Contact Username (e.g. @my_support) [$DEF_SUPPORT_CONTACT]: " SUPPORT_CONTACT
-    SUPPORT_CONTACT=${SUPPORT_CONTACT:-$DEF_SUPPORT_CONTACT}
-
-    read -p "Brand Name (shown in bot UI) [$DEF_BRAND_NAME]: " BRAND_NAME
-    BRAND_NAME=${BRAND_NAME:-$DEF_BRAND_NAME}
-
-    read -p "Card Number for Payments [$DEF_CARD_NUMBER]: " CARD_NUMBER
-    CARD_NUMBER=${CARD_NUMBER:-$DEF_CARD_NUMBER}
-
-    read -p "Card Holder Name [$DEF_CARD_HOLDER]: " CARD_HOLDER
-    CARD_HOLDER=${CARD_HOLDER:-$DEF_CARD_HOLDER}
-
-    read -p "Currency Label (e.g. IRR, USD, EUR) [$DEF_FIAT_CURRENCY]: " FIAT_CURRENCY
-    FIAT_CURRENCY=${FIAT_CURRENCY:-$DEF_FIAT_CURRENCY}
-
-    # Connection Mode configuration
-    echo ""
-    echo "Telegram Connection Mode:"
-    echo "1) DIRECT (Direct connection to Telegram API)"
-    echo "2) PROXY (Route requests through HTTP/Socks5 proxy)"
-    echo "3) XRAY (Route requests through local xray-core client)"
-    read -p "Select Mode (1-3) [DIRECT]: " CONN_CHOICE
-    
-    CONNECT_MODE="DIRECT"
-    if [ "$CONN_CHOICE" = "2" ] || [ "$DEF_CONNECT_MODE" = "PROXY" -a -z "$CONN_CHOICE" ]; then
-        CONNECT_MODE="PROXY"
-        read -p "Proxy URL (e.g. socks5://127.0.0.1:1080) [$DEF_PROXY_URL]: " PROXY_URL
-        PROXY_URL=${PROXY_URL:-$DEF_PROXY_URL}
-    elif [ "$CONN_CHOICE" = "3" ] || [ "$DEF_CONNECT_MODE" = "XRAY" -a -z "$CONN_CHOICE" ]; then
-        CONNECT_MODE="XRAY"
-        read -p "Xray Link Config URL (vless/vmess/trojan/ss) [$DEF_XRAY_CONFIG_URL]: " XRAY_CONFIG_URL
-        XRAY_CONFIG_URL=${XRAY_CONFIG_URL:-$DEF_XRAY_CONFIG_URL}
-        
-        # Check if xray is on system
-        if ! command -v xray &>/dev/null && [ ! -f "/usr/local/bin/xray" ]; then
-            warn "xray-core binary not found."
-            read -p "Would you like to automatically download and install official xray-core? (Y/n): " AUTO_XRAY
-            AUTO_XRAY=${AUTO_XRAY:-"Y"}
-            if [[ "$AUTO_XRAY" =~ ^[Yy]$ ]]; then
-                info "Detecting CPU architecture..."
-                ARCH=$(uname -m)
-                if [ "$ARCH" = "x86_64" ]; then
-                    XRAY_ARCH="64"
-                elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-                    XRAY_ARCH="arm64-v8a"
-                else
-                    XRAY_ARCH="32"
-                fi
-                
-                # Fetch latest release binary URL
-                LATEST_XRAY_URL=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep "browser_download_url" | grep "linux-${XRAY_ARCH}.zip" | head -n 1 | cut -d '"' -f 4)
-                if [ -n "$LATEST_XRAY_URL" ]; then
-                    info "Downloading Xray-core..."
-                    curl -L -o /tmp/xray.zip "$LATEST_XRAY_URL"
-                    mkdir -p /tmp/xray_extract
-                    unzip -q /tmp/xray.zip -d /tmp/xray_extract
-                    mv /tmp/xray_extract/xray /usr/local/bin/xray
-                    chmod +x /usr/local/bin/xray
-                    rm -rf /tmp/xray.zip /tmp/xray_extract
-                    success "Xray-core installed successfully to /usr/local/bin/xray"
-                    XRAY_BIN="/usr/local/bin/xray"
-                else
-                    error "Could not fetch Xray-core release. Please install it manually and set XRAY_BIN."
-                    XRAY_BIN="xray"
-                fi
-            else
-                XRAY_BIN="xray"
-            fi
-        else
-            XRAY_BIN="xray"
-        fi
-        
-        read -p "Xray local SOCKS port [$DEF_XRAY_SOCKS_PORT]: " XRAY_SOCKS_PORT
-        XRAY_SOCKS_PORT=${XRAY_SOCKS_PORT:-$DEF_XRAY_SOCKS_PORT}
-    fi
-
-    # Crypto payment configuration
-    read -p "Enable NowPayments Crypto Payments? (y/N) [$DEF_CRYPTO_ENABLED]: " CRYPTO_CHOICE
-    CRYPTO_CHOICE=${CRYPTO_CHOICE:-$DEF_CRYPTO_ENABLED}
-    
-    CRYPTO_ENABLED="false"
-    if [[ "$CRYPTO_CHOICE" =~ ^[Yy]$ || "$CRYPTO_CHOICE" = "true" ]]; then
-        CRYPTO_ENABLED="true"
-        read -p "NowPayments API Key [$DEF_NOWPAYMENTS_API_KEY]: " NOWPAYMENTS_API_KEY
-        NOWPAYMENTS_API_KEY=${NOWPAYMENTS_API_KEY:-$DEF_NOWPAYMENTS_API_KEY}
-        
-        read -p "NowPayments IPN Secret [$DEF_NOWPAYMENTS_IPN_SECRET]: " NOWPAYMENTS_IPN_SECRET
-        NOWPAYMENTS_IPN_SECRET=${NOWPAYMENTS_IPN_SECRET:-$DEF_NOWPAYMENTS_IPN_SECRET}
-        
-        read -p "Public Domain URL for IPN callbacks (e.g. https://bot.yourdomain.com) [$DEF_PUBLIC_BASE_URL]: " PUBLIC_BASE_URL
-        PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-$DEF_PUBLIC_BASE_URL}
-    fi
-
-    read -p "Webhook/IPN Local Bind Port [8080]: " WEBHOOK_PORT
-    WEBHOOK_PORT=${WEBHOOK_PORT:-$DEF_WEBHOOK_PORT}
-
-    # Save to .env file
-    info "Creating .env configuration file..."
-    cat << EOF > "$INSTALL_DIR/.env"
-BOT_TOKEN=$BOT_TOKEN
-ADMIN_IDS=$ADMIN_IDS
-CONNECT_MODE=$CONNECT_MODE
-PROXY_MODE=OFF
-PROXY_URL=$PROXY_URL
-XRAY_CONFIG_URL=$XRAY_CONFIG_URL
-XRAY_BIN=${XRAY_BIN:-"xray"}
-XRAY_SOCKS_PORT=${XRAY_SOCKS_PORT:-"10808"}
-DATABASE_URL=sqlite+aiosqlite:///$INSTALL_DIR/vpnbot.db
-DEFAULT_LANG=$DEFAULT_LANG
-SUPPORT_CONTACT=$SUPPORT_CONTACT
-BRAND_NAME=$BRAND_NAME
-CARD_NUMBER=$CARD_NUMBER
-CARD_HOLDER=$CARD_HOLDER
-FIAT_CURRENCY=$FIAT_CURRENCY
-STARS_ENABLED=true
-CRYPTO_ENABLED=$CRYPTO_ENABLED
-NOWPAYMENTS_API_KEY=$NOWPAYMENTS_API_KEY
-NOWPAYMENTS_IPN_SECRET=$NOWPAYMENTS_IPN_SECRET
-PUBLIC_BASE_URL=$PUBLIC_BASE_URL
-WEBHOOK_HOST=127.0.0.1
-WEBHOOK_PORT=$WEBHOOK_PORT
-EOF
-
-    # Fix directory permissions
-    chown -R vpnbot:vpnbot "$INSTALL_DIR"
-    chmod -R 750 "$INSTALL_DIR"
-    if [ -f "$INSTALL_DIR/vpnbot.db" ]; then
-        chmod 660 "$INSTALL_DIR/vpnbot.db"
-    fi
+    # Read variables needed for nginx/firewall setup from the generated .env
+    eval_env_var() {
+        grep "^$1=" "$INSTALL_DIR/.env" | cut -d'=' -f2- | tr -d '\r'
+    }
+    PUBLIC_BASE_URL=$(eval_env_var "PUBLIC_BASE_URL")
+    WEBHOOK_PORT=$(eval_env_var "WEBHOOK_PORT")
 
     # 7. Systemd Service setup
     info "Creating Systemd service unit..."
@@ -828,16 +909,19 @@ manage_bot() {
 # Main Execution Flow - Argument Parsing
 UNINSTALL_FLAG=false
 UPDATE_FLAG=false
+CONFIG_FLAG=false
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         -u|--uninstall) UNINSTALL_FLAG=true ;;
         --update|--upgrade) UPDATE_FLAG=true ;;
+        -c|--config) CONFIG_FLAG=true ;;
         -h|--help)
             echo "Usage: $0 [options]"
             echo "Options:"
             echo "  -u, --uninstall   Directly trigger the uninstaller"
             echo "  --update          Directly trigger the quick update/upgrade flow"
+            echo "  -c, --config      Directly trigger the .env configuration wizard"
             echo "  -h, --help        Show this help message"
             exit 0
             ;;
@@ -858,16 +942,28 @@ if [ "$UPDATE_FLAG" = true ]; then
     exit 0
 fi
 
+# If config flag is passed, run directly
+if [ "$CONFIG_FLAG" = true ]; then
+    install_dir=""
+    if [ -f "/etc/systemd/system/vpn-bot.service" ]; then
+        install_dir=$(grep WorkingDirectory /etc/systemd/system/vpn-bot.service | awk -F'=' '{print $2}' || echo "")
+    fi
+    install_dir=${install_dir:-"/opt/vpn-bot"}
+    configure_bot "$install_dir"
+    exit 0
+fi
+
 # Otherwise, present interactive menu
 while true; do
     echo -e "${CYAN}${BOLD}VPN Telegram Bot Tool Suite${NC}"
     echo "--------------------------------------------------------"
     echo "1) Install / Upgrade VPN Telegram Bot"
-    echo "2) Manage Bot Service (Start/Stop/Logs)"
-    echo "3) Uninstall Bot Service"
-    echo "4) Exit"
+    echo "2) Update .env Configuration"
+    echo "3) Manage Bot Service (Start/Stop/Logs)"
+    echo "4) Uninstall Bot Service"
+    echo "5) Exit"
     echo "--------------------------------------------------------"
-    read -p "Please select an option (1-4): " CHOICE
+    read -p "Please select an option (1-5): " CHOICE
 
     case $CHOICE in
         1)
@@ -875,18 +971,26 @@ while true; do
             break
             ;;
         2)
-            manage_bot
+            install_dir=""
+            if [ -f "/etc/systemd/system/vpn-bot.service" ]; then
+                install_dir=$(grep WorkingDirectory /etc/systemd/system/vpn-bot.service | awk -F'=' '{print $2}' || echo "")
+            fi
+            install_dir=${install_dir:-"/opt/vpn-bot"}
+            configure_bot "$install_dir"
             ;;
         3)
+            manage_bot
+            ;;
+        4)
             uninstall_bot
             break
             ;;
-        4)
+        5)
             info "Exiting..."
             exit 0
             ;;
         *)
-            error "Invalid option. Please choose between 1 and 4."
+            error "Invalid option. Please choose between 1 and 5."
             echo ""
             ;;
     esac
