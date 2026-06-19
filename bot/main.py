@@ -24,7 +24,7 @@ from bot.handlers.admin import (
     income_admin,
 )
 from bot.handlers.user import balance, checkout, myservices, plans, start, freetrial, reseller_panel
-from bot.middlewares import ActiveBotMiddleware, BannedMiddleware, I18nMiddleware, ThrottlingMiddleware
+from bot.middlewares import ActiveBotMiddleware, BannedMiddleware, I18nMiddleware, ThrottlingMiddleware, DeduplicationMiddleware
 from bot.panel.client import close_panel
 from bot.payments.base import setup_providers
 from bot.web.ipn import build_web_app
@@ -44,6 +44,10 @@ def build_dispatcher() -> Dispatcher:
     # Set active_bot context first
     dp.message.outer_middleware(ActiveBotMiddleware())
     dp.callback_query.outer_middleware(ActiveBotMiddleware())
+
+    # Drop duplicate Telegram updates (e.g. from network retries or client double-sends)
+    dp.message.outer_middleware(DeduplicationMiddleware())
+    dp.callback_query.outer_middleware(DeduplicationMiddleware())
 
     # Throttling middleware (limits messages/callbacks)
     # We apply this first so we don't even process banned or i18n logic if spamming

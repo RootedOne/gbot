@@ -143,3 +143,39 @@ class ActiveBotMiddleware(BaseMiddleware):
             active_bot.reset(token)
 
 
+class DeduplicationMiddleware(BaseMiddleware):
+    """Drops duplicate Telegram messages or callback queries to prevent double execution."""
+
+    def __init__(self, ttl: float = 3.0):
+        from cachetools import TTLCache
+        self.cache = TTLCache(maxsize=10_000, ttl=ttl)
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any],
+    ) -> Any:
+        event_id = None
+        if isinstance(event, Message):
+            event_id = f"msg_{event.message_id}_{event.chat.id}"
+        elif isinstance(event, CallbackQuery):
+            if event.message:
+                event_id = f"cb_{event.message.message_id}_{event.message.chat.id}_{event.data}"
+            else:
+                event_id = f"cb_{event.id}"
+
+        if event_id is not None:
+            if event_id in self.cache:
+                logger.warning("Dropped duplicate Telegram update: %s", event_id)
+                if isinstance(event, CallbackQuery):
+                    try:
+                        await event.answer()
+                    except Exception:
+                        pass
+                return None
+            self.cache[event_id] = True
+
+        return await handler(event, data)
+
+

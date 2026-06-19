@@ -47,6 +47,112 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Function to upgrade the bot using git pull
+upgrade_bot() {
+    local target_dir=$1
+    target_dir=${target_dir:-"/opt/vpn-bot"}
+
+    echo -e "${CYAN}${BOLD}"
+    echo "========================================================"
+    echo "    VPN Telegram Bot - Upgrading                        "
+    echo "========================================================"
+    echo -e "${NC}"
+
+    if [ ! -d "$target_dir" ]; then
+        error "No installation found at $target_dir. Cannot upgrade."
+        return 1
+    fi
+
+    if [ ! -d "$target_dir/.git" ]; then
+        warn "No Git repository found at $target_dir. Quick upgrade is not possible."
+        read -p "Would you like to run a full re-install instead? (y/N): " RUN_FULL
+        if [[ "$RUN_FULL" =~ ^[Yy]$ ]]; then
+            rm -rf "$target_dir"
+            install_bot
+            return 0
+        else
+            error "Upgrade aborted."
+            return 1
+        fi
+    fi
+
+    info "Navigating to $target_dir..."
+    cd "$target_dir"
+
+    # Handle local changes
+    if ! git diff-index --quiet HEAD --; then
+        warn "You have local changes in the bot directory."
+        echo "Please choose how to proceed:"
+        echo "  1) Temporarily stash your changes, pull code, then re-apply them (Recommended)"
+        echo "  2) Overwrite/discard your local changes and force update"
+        echo "  3) Abort update"
+        read -p "Select option (1-3) [1]: " LOCAL_CHANGES_CHOICE
+        LOCAL_CHANGES_CHOICE=${LOCAL_CHANGES_CHOICE:-"1"}
+
+        if [ "$LOCAL_CHANGES_CHOICE" = "1" ]; then
+            info "Stashing local changes..."
+            git stash
+        elif [ "$LOCAL_CHANGES_CHOICE" = "2" ]; then
+            info "Discarding local changes..."
+            git reset --hard HEAD
+        else
+            error "Update aborted."
+            return 1
+        fi
+    fi
+
+    info "Pulling latest changes from Github..."
+    if ! git pull; then
+        error "Failed to pull latest changes. Please check internet connection or Git access."
+        # Restore stash if we stashed
+        if git stash list | grep -q "stash@{0}"; then
+            info "Restoring stashed changes..."
+            git stash pop || true
+        fi
+        return 1
+    fi
+
+    # Pop stash if we stashed
+    if git stash list | grep -q "stash@{0}"; then
+        info "Applying stashed changes..."
+        if ! git stash pop; then
+            warn "Conflicts occurred while re-applying local changes. Please resolve them manually."
+        fi
+    fi
+
+    # Upgrade dependencies
+    info "Upgrading python dependencies..."
+    if [ -f "$target_dir/.venv/bin/pip" ]; then
+        "$target_dir/.venv/bin/pip" install --upgrade pip
+        "$target_dir/.venv/bin/pip" install -r "$target_dir/requirements.txt"
+    else
+        warn "Virtual environment not found. Setting up fresh virtual environment..."
+        python3 -m venv "$target_dir/.venv"
+        "$target_dir/.venv/bin/pip" install --upgrade pip
+        "$target_dir/.venv/bin/pip" install -r "$target_dir/requirements.txt"
+    fi
+
+    # Fix permissions
+    chown -R vpnbot:vpnbot "$target_dir"
+    chmod -R 750 "$target_dir"
+    if [ -f "$target_dir/vpnbot.db" ]; then
+        chmod 660 "$target_dir/vpnbot.db"
+    fi
+
+    # Restart service
+    info "Restarting vpn-bot service..."
+    systemctl daemon-reload
+    systemctl restart vpn-bot
+
+    sleep 2
+    if systemctl is-active --quiet vpn-bot; then
+        success "VPN Telegram Bot updated and restarted successfully!"
+    else
+        error "Service failed to start after update. Check logs using 'journalctl -u vpn-bot -n 50'."
+        return 1
+    fi
+}
+
 # Function to run installation
 install_bot() {
     echo -e "${CYAN}${BOLD}"
@@ -117,19 +223,28 @@ install_bot() {
     read -p "Installation Directory [/opt/vpn-bot]: " INSTALL_DIR
     INSTALL_DIR=${INSTALL_DIR:-"/opt/vpn-bot"}
 
-    # Backup database if we are overwriting an existing installation
-    DB_BACKUP_TEMP=""
-    if [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/vpnbot.db" ]; then
-        warn "Existing installation found. Creating temporary database backup..."
-        DB_BACKUP_TEMP="/tmp/vpnbot_db_$(date +%s).bak"
-        cp "$INSTALL_DIR/vpnbot.db" "$DB_BACKUP_TEMP"
-    fi
-
     # Check if directory already exists and handle overwrite
     if [ -d "$INSTALL_DIR" ]; then
         warn "Directory $INSTALL_DIR already exists."
-        read -p "Do you want to overwrite it and upgrade? (y/N): " CONFIRM_OVERWRITE
-        if [[ "$CONFIRM_OVERWRITE" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}An existing installation was detected. Please choose how to proceed:${NC}"
+        echo "  1) Quick Update (pulls latest code via Git, updates dependencies, restarts service, preserves your DB and config)"
+        echo "  2) Full Re-install (wipes the directory, re-clones, and re-runs the configuration wizard)"
+        echo "  3) Cancel"
+        read -p "Select option (1-3) [1]: " UPGRADE_CHOICE
+        UPGRADE_CHOICE=${UPGRADE_CHOICE:-"1"}
+
+        if [ "$UPGRADE_CHOICE" = "1" ]; then
+            upgrade_bot "$INSTALL_DIR"
+            return 0
+        elif [ "$UPGRADE_CHOICE" = "2" ]; then
+            # Backup database if we are overwriting an existing installation
+            DB_BACKUP_TEMP=""
+            if [ -f "$INSTALL_DIR/vpnbot.db" ]; then
+                warn "Creating temporary database backup..."
+                DB_BACKUP_TEMP="/tmp/vpnbot_db_$(date +%s).bak"
+                cp "$INSTALL_DIR/vpnbot.db" "$DB_BACKUP_TEMP"
+            fi
+            
             # We keep the old .env if it exists
             OLD_ENV=""
             if [ -f "$INSTALL_DIR/.env" ]; then
@@ -712,14 +827,17 @@ manage_bot() {
 
 # Main Execution Flow - Argument Parsing
 UNINSTALL_FLAG=false
+UPDATE_FLAG=false
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         -u|--uninstall) UNINSTALL_FLAG=true ;;
+        --update|--upgrade) UPDATE_FLAG=true ;;
         -h|--help)
             echo "Usage: $0 [options]"
             echo "Options:"
             echo "  -u, --uninstall   Directly trigger the uninstaller"
+            echo "  --update          Directly trigger the quick update/upgrade flow"
             echo "  -h, --help        Show this help message"
             exit 0
             ;;
@@ -731,6 +849,12 @@ done
 # If uninstall flag is passed, run directly
 if [ "$UNINSTALL_FLAG" = true ]; then
     uninstall_bot
+    exit 0
+fi
+
+# If update flag is passed, run directly
+if [ "$UPDATE_FLAG" = true ]; then
+    upgrade_bot "/opt/vpn-bot"
     exit 0
 fi
 

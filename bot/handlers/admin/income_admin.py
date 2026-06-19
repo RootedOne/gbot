@@ -40,8 +40,8 @@ async def show_income_summary(call: CallbackQuery, bot: Bot) -> None:
     stats = await repo.get_income_stats(node_id)
     
     # 2. Render chart
-    chart_dir = "/Users/ali/Documents/vpn-bot/bot/scratch"
-    os.makedirs(chart_dir, exist_ok=True)
+    import tempfile
+    chart_dir = tempfile.gettempdir()
     chart_path = f"{chart_dir}/income_chart_{node_id}_{int(time.time())}.png"
     
     try:
