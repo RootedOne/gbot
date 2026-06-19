@@ -1,0 +1,116 @@
+# ==============================================================================
+# VPN Telegram Bot & Relay - Premium gitignore
+# ==============================================================================
+
+# --- Python Compilation & Execution ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pycache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.ipynb_checkpoints/
+.cache/
+
+# --- Virtual Environments ---
+.venv/
+venv/
+env/
+ENV/
+*.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# --- Environment Configurations (Secret Credentials) ---
+.env
+.env.local
+.env.*
+!.env.example
+
+# --- Databases (SQLite & Active State Transients) ---
+*.db
+*.sqlite
+*.sqlite3
+# SQLite Write-Ahead Logging (WAL) & Shared Memory (SHM) temp files
+*.db-shm
+*.db-wal
+*.db-journal
+# Backups and old snapshots
+*.db.old
+*.db.backup
+*.db.bak
+
+# --- Logs & Performance Traces ---
+*.log
+logs/
+*.pid
+
+# --- Local Xray-Core Binaries & Configs ---
+xray
+xray.exe
+xray-tg-*.json
+xray-core/
+
+# --- Certificates, Private Keys & Secret Tokens (SSL/TLS Prevention) ---
+*.pem
+*.key
+*.crt
+*.csr
+*.pfx
+*.cer
+*.p12
+
+# --- Operating System Garbage ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# --- Editors & IDE Configurations ---
+.idea/
+.vscode/
+*.swp
+*.swo
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# --- Dist / Builds ---
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Front-end Node (Just in Case) ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# --- Local Workspace / Scratch Space ---
+scratch/
+/relay.tar.gz
+/relay/relay-server/

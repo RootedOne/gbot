@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VPN Bot Premium Web-UI Dashboard</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;505;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Custom Style -->
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+
+    <!-- Login Overlay -->
+    <div id="login-overlay" class="overlay">
+        <div class="login-card glass">
+            <div class="brand">
+                <i class="fa-solid fa-shield-halved brand-logo"></i>
+                <h2>VPN Admin Login</h2>
+                <p>Enter the secure admin token or log in via the bot command <code>/webpanel</code></p>
+            </div>
+            <div class="form-group">
+                <label for="login-token">Secure Token</label>
+                <div class="input-with-icon">
+                    <i class="fa-solid fa-key"></i>
+                    <input type="password" id="login-token" placeholder="Paste token here...">
+                </div>
+            </div>
+            <button id="btn-login" class="btn btn-primary btn-block">Authenticate</button>
+            <div id="login-error" class="error-msg"></div>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <div id="dashboard-container" class="layout-wrapper" style="display: none;">
+        
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-brand">
+                    <i class="fa-solid fa-shield-halved text-gradient"></i>
+                    <span>VPN Bot Admin</span>
+                </div>
+            </div>
+            <nav class="sidebar-nav">
+                <ul>
+                    <li class="nav-item active" data-tab="dashboard">
+                        <i class="fa-solid fa-chart-pie"></i>
+                        <span>Dashboard</span>
+                    </li>
+                    <li class="nav-item" data-tab="users">
+                        <i class="fa-solid fa-users"></i>
+                        <span>Users</span>
+                    </li>
+                    <li class="nav-item" data-tab="orders">
+                        <i class="fa-solid fa-receipt"></i>
+                        <span>Orders</span>
+                        <span id="badge-orders" class="badge bg-danger" style="display: none;">0</span>
+                    </li>
+                    <li class="nav-item" data-tab="plans">
+                        <i class="fa-solid fa-box-archive"></i>
+                        <span>Plans</span>
+                    </li>
+                    <li class="nav-item" data-tab="panels">
+                        <i class="fa-solid fa-server"></i>
+                        <span>Servers</span>
+                    </li>
+                    <li class="nav-item" data-tab="nodes">
+                        <i class="fa-solid fa-network-wired"></i>
+                        <span>Reseller Nodes</span>
+                    </li>
+                    <li class="nav-item" data-tab="settings">
+                        <i class="fa-solid fa-sliders"></i>
+                        <span>Settings</span>
+                    </li>
+                </ul>
+            </nav>
+            <div class="sidebar-footer">
+                <button id="btn-logout" class="btn btn-logout btn-block">
+                    <i class="fa-solid fa-right-from-bracket"></i> Logout
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            <header class="content-header">
+                <h1 id="header-title">Dashboard</h1>
+                <div class="header-actions">
+                    <span id="admin-info" class="admin-badge"><i class="fa-solid fa-user-shield"></i> Admin</span>
+                </div>
+            </header>
+
+            <!-- TAB: Dashboard -->
+            <section id="tab-dashboard" class="tab-content active">
+                <div class="metrics-grid">
+                    <div class="metric-card glass">
+                        <div class="metric-info">
+                            <span class="metric-label">Total Users</span>
+                            <h3 id="stat-users" class="metric-val">0</h3>
+                        </div>
+                        <div class="metric-icon bg-indigo"><i class="fa-solid fa-users"></i></div>
+                    </div>
+                    <div class="metric-card glass">
+                        <div class="metric-info">
+                            <span class="metric-label">Active Configs</span>
+                            <h3 id="stat-services" class="metric-val">0</h3>
+                        </div>
+                        <div class="metric-icon bg-violet"><i class="fa-solid fa-shield-check"></i></div>
+                    </div>
+                    <div class="metric-card glass">
+                        <div class="metric-info">
+                            <span class="metric-label">Pending Receipts</span>
+                            <h3 id="stat-receipts" class="metric-val">0</h3>
+                        </div>
+                        <div class="metric-icon bg-pink"><i class="fa-solid fa-receipt"></i></div>
+                    </div>
+                </div>
+
+                <div class="dashboard-charts">
+                    <div class="chart-card glass large">
+                        <h3>Revenue Overview</h3>
+                        <div class="chart-container">
+                            <canvas id="chart-revenue"></canvas>
+                        </div>
+                    </div>
+                    <div class="chart-card glass small">
+                        <h3>Top 5 Plans</h3>
+                        <div class="chart-container">
+                            <canvas id="chart-plans"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="servers-section mt-4">
+                    <div class="glass p-4 rounded-xl">
+                        <h3 class="mb-3"><i class="fa-solid fa-server mr-2 text-indigo"></i> Servers (3X-UI Status)</h3>
+                        <div class="table-responsive">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th>Server Name</th>
+                                        <th>Status</th>
+                                        <th>CPU Usage</th>
+                                        <th>Memory Usage</th>
+                                        <th>Xray Service</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dashboard-servers-list">
+                                    <!-- Dynamic -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: Users -->
+            <section id="tab-users" class="tab-content">
+                <div class="glass p-4 rounded-xl">
+                    <div class="action-header mb-4">
+                        <div class="search-box">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="text" id="users-search" placeholder="Search by ID, Username, Name...">
+                        </div>
+                        <button id="btn-search-users" class="btn btn-primary">Search</button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Telegram ID</th>
+                                    <th>Name</th>
+                                    <th>Username</th>
+                                    <th>Balance</th>
+                                    <th>Reseller</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="users-list">
+                                <!-- Dynamic -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="pagination mt-4">
+                        <button id="btn-users-prev" class="btn btn-secondary btn-sm" disabled><i class="fa-solid fa-chevron-left"></i> Previous</button>
+                        <span id="users-page-info">Page 1</span>
+                        <button id="btn-users-next" class="btn btn-secondary btn-sm">Next <i class="fa-solid fa-chevron-right"></i></button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: Orders -->
+            <section id="tab-orders" class="tab-content">
+                <div class="glass p-4 rounded-xl">
+                    <div class="tab-nav-sub mb-4">
+                        <button class="tab-btn-sub active" data-order-status="">All Orders</button>
+                        <button class="tab-btn-sub" data-order-status="awaiting_review">Awaiting Review</button>
+                        <button class="tab-btn-sub" data-order-status="paid">Paid</button>
+                        <button class="tab-btn-sub" data-order-status="rejected">Rejected</button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Order ID</th>
+                                    <th>User</th>
+                                    <th>Plan</th>
+                                    <th>Type</th>
+                                    <th>Method</th>
+                                    <th>Amount</th>
+                                    <th>Status</th>
+                                    <th>Date</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="orders-list">
+                                <!-- Dynamic -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: Plans -->
+            <section id="tab-plans" class="tab-content">
+                <div class="glass p-4 rounded-xl">
+                    <div class="action-header mb-4">
+                        <h3>Service Plans</h3>
+                        <button id="btn-new-plan" class="btn btn-primary"><i class="fa-solid fa-plus mr-1"></i> New Plan</button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Order</th>
+                                    <th>Title</th>
+                                    <th>Traffic</th>
+                                    <th>Duration</th>
+                                    <th>Price Card</th>
+                                    <th>Price Stars</th>
+                                    <th>Price USD</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="plans-list">
+                                <!-- Dynamic -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: Panels -->
+            <section id="tab-panels" class="tab-content">
+                <div class="glass p-4 rounded-xl">
+                    <div class="action-header mb-4">
+                        <h3>3X-UI Servers</h3>
+                        <button id="btn-new-panel" class="btn btn-primary"><i class="fa-solid fa-plus mr-1"></i> Register Server</button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Sort</th>
+                                    <th>Name</th>
+                                    <th>Base URL</th>
+                                    <th>Active</th>
+                                    <th>Trials</th>
+                                    <th>Migrations</th>
+                                    <th>Resellers</th>
+                                    <th>Diagnostic</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="panels-list">
+                                <!-- Dynamic -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: Reseller Nodes -->
+            <section id="tab-nodes" class="tab-content">
+                <div class="glass p-4 rounded-xl">
+                    <div class="action-header mb-4">
+                        <h3>Reseller Bots (Nodes)</h3>
+                        <button id="btn-new-node" class="btn btn-primary"><i class="fa-solid fa-plus mr-1"></i> Add Node Bot</button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Node ID</th>
+                                    <th>Owner ID</th>
+                                    <th>Bot @Username</th>
+                                    <th>Brand</th>
+                                    <th>Active</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="nodes-list">
+                                <!-- Dynamic -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: Settings -->
+            <section id="tab-settings" class="tab-content">
+                <div class="settings-grid">
+                    <div class="settings-card glass">
+                        <h3><i class="fa-solid fa-sliders text-indigo mr-2"></i> General Configuration</h3>
+                        <form id="form-settings" class="mt-3">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Brand Name</label>
+                                    <input type="text" name="brand_name" required>
+                                </div>
+                                <div class="form-group">
+                                    <label>Support Contact</label>
+                                    <input type="text" name="support_contact" placeholder="@username" required>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Fiat Currency</label>
+                                    <input type="text" name="fiat_currency" placeholder="IRR / Tomans" required>
+                                </div>
+                                <div class="form-group">
+                                    <label>Public Base URL (External host)</label>
+                                    <input type="text" name="public_base_url" placeholder="https://domain.com" required>
+                                </div>
+                            </div>
+                            <div class="form-row mt-4">
+                                <div class="form-group">
+                                    <label class="switch-label">
+                                        <input type="checkbox" name="stars_enabled">
+                                        <span class="custom-switch"></span>
+                                        Enable Telegram Stars
+                                    </label>
+                                </div>
+                                <div class="form-group">
+                                    <label class="switch-label">
+                                        <input type="checkbox" name="crypto_enabled">
+                                        <span class="custom-switch"></span>
+                                        Enable Crypto (NowPayments)
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="admin-ids-group mt-3">
+                                <label>Admin Telegram IDs (Comma-separated)</label>
+                                <input type="text" name="admin_ids" placeholder="12345,67890" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary mt-4">Save Configuration</button>
+                        </form>
+                    </div>
+
+                    <div class="settings-card glass">
+                        <h3><i class="fa-solid fa-credit-card text-violet mr-2"></i> Payment Details</h3>
+                        <form id="form-settings-payments" class="mt-3">
+                            <div class="form-group">
+                                <label>Card Number</label>
+                                <input type="text" name="card_number">
+                            </div>
+                            <div class="form-group">
+                                <label>Card Holder Name</label>
+                                <input type="text" name="card_holder">
+                            </div>
+                            <div class="form-group border-top pt-3 mt-3">
+                                <label>NowPayments API Key</label>
+                                <input type="password" name="nowpayments_api_key">
+                            </div>
+                            <div class="form-group">
+                                <label>NowPayments IPN Secret</label>
+                                <input type="password" name="nowpayments_ipn_secret">
+                            </div>
+                            <button type="submit" class="btn btn-primary mt-4">Save Payment Gateway</button>
+                        </form>
+                    </div>
+
+                    <div class="settings-card glass full-width">
+                        <h3><i class="fa-solid fa-coins text-pink mr-2"></i> Global Extra Bandwidth & Time Addon Pricing</h3>
+                        <form id="form-settings-addons" class="mt-3">
+                            <div class="pricing-addons-row">
+                                <div class="addon-price-col">
+                                    <h4>Extra GB Package Unit Prices</h4>
+                                    <div class="form-group">
+                                        <label>Fiat Price per GB</label>
+                                        <input type="number" name="extra_gb_price_fiat" step="any" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Stars price per GB</label>
+                                        <input type="number" name="extra_gb_price_stars" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>USD price per GB</label>
+                                        <input type="number" name="extra_gb_price_usd" step="any" required>
+                                    </div>
+                                </div>
+                                <div class="addon-price-col">
+                                    <h4>Extra Time Package Unit Prices (Per Day)</h4>
+                                    <div class="form-group">
+                                        <label>Fiat Price per Day</label>
+                                        <input type="number" name="extra_time_price_fiat" step="any" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Stars price per Day</label>
+                                        <input type="number" name="extra_time_price_stars" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>USD price per Day</label>
+                                        <input type="number" name="extra_time_price_usd" step="any" required>
+                                    </div>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary mt-4">Save Addon Prices</button>
+                        </form>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- MODAL: Receipt Image Review -->
+    <div id="modal-receipt" class="modal">
+        <div class="modal-content glass medium">
+            <span class="close-modal">&times;</span>
+            <h3 class="mb-3">Card Payment Receipt Verification</h3>
+            <div id="receipt-preview-img-container">
+                <div class="loader">
+                    <i class="fa-solid fa-spinner fa-spin"></i> Loading Receipt Image...
+                </div>
+                <img id="receipt-img" alt="Receipt Upload" style="display: none;">
+            </div>
+            <div class="modal-actions mt-4">
+                <button id="btn-approve-receipt" class="btn btn-success"><i class="fa-solid fa-check mr-1"></i> Approve & Provision</button>
+                <button id="btn-reject-receipt" class="btn btn-danger"><i class="fa-solid fa-xmark mr-1"></i> Reject & Notify User</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Adjust Balance -->
+    <div id="modal-balance" class="modal">
+        <div class="modal-content glass small">
+            <span class="close-modal">&times;</span>
+            <h3>Adjust Wallet Balance</h3>
+            <p id="balance-user-name" class="text-secondary mb-3"></p>
+            <form id="form-adjust-balance">
+                <input type="hidden" id="balance-tg-id">
+                <div class="form-group">
+                    <label>Amount (Signed delta, e.g. <code>+5000</code> or <code>-2000</code>)</label>
+                    <input type="number" id="balance-amount" step="any" placeholder="Enter amount..." required>
+                </div>
+                <div class="form-group">
+                    <label>Reason / Audit Log</label>
+                    <input type="text" id="balance-reason" placeholder="e.g. Compensation, Manual charge" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block mt-3">Apply Adjustment</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: Reseller Config -->
+    <div id="modal-reseller" class="modal">
+        <div class="modal-content glass small">
+            <span class="close-modal">&times;</span>
+            <h3>Reseller Wholesale Configuration</h3>
+            <p id="reseller-user-name" class="text-secondary mb-3"></p>
+            <form id="form-config-reseller">
+                <input type="hidden" id="reseller-tg-id">
+                <div class="form-group mt-3">
+                    <label class="switch-label">
+                        <input type="checkbox" id="reseller-enabled">
+                        <span class="custom-switch"></span>
+                        Enable Reseller Privileges
+                    </label>
+                </div>
+                <div class="form-group mt-3">
+                    <label>Wholesale price per GB (Fiat)</label>
+                    <input type="number" id="reseller-gb-price" step="any" required>
+                </div>
+                <div class="form-group">
+                    <label>Wholesale price per Day (Fiat)</label>
+                    <input type="number" id="reseller-day-price" step="any" required>
+                </div>
+                <div class="form-group">
+                    <label>Wholesale price for Unlimited plans (Fiat)</label>
+                    <input type="number" id="reseller-unlimited-price" step="any" required>
+                </div>
+                
+                <!-- Server specific prices -->
+                <div class="border-top pt-3 mt-3">
+                    <h5 class="mb-2">Server Specific Custom Prices (Optional)</h5>
+                    <p class="text-secondary small mb-3">Specify custom GB or Unlimited price for specific servers. Leave blank to use default global price.</p>
+                    <div id="reseller-panel-prices-list"></div>
+                </div>
+                
+                <button type="submit" class="btn btn-primary btn-block mt-3">Save Configuration</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: Edit Panel -->
+    <div id="modal-panel" class="modal">
+        <div class="modal-content glass">
+            <span class="close-modal">&times;</span>
+            <h3 id="panel-modal-title">Register 3X-UI Server</h3>
+            <form id="form-panel" class="mt-3">
+                <input type="hidden" id="panel-id">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Server Name</label>
+                        <input type="text" id="panel-name" placeholder="e.g., Frankfurt Highspeed" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Sort Order</label>
+                        <input type="number" id="panel-sort" value="0">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Base URL (API Host)</label>
+                    <input type="text" id="panel-base-url" placeholder="http://1.2.3.4:2053" required>
+                </div>
+                <div class="form-group">
+                    <label>API Token (Bearer)</label>
+                    <input type="password" id="panel-api-token" placeholder="Bearer Authorization token" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Subscription Base URL (Multiple base hosts separate by comma/newline)</label>
+                        <input type="text" id="panel-sub-url" placeholder="https://mycdn.com">
+                    </div>
+                </div>
+                <div class="form-row mt-3">
+                    <div class="form-group">
+                        <label class="switch-label">
+                            <input type="checkbox" id="panel-active" checked>
+                            <span class="custom-switch"></span>
+                            Active status
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="switch-label">
+                            <input type="checkbox" id="panel-verify-tls" checked>
+                            <span class="custom-switch"></span>
+                            Verify SSL certificates (TLS)
+                        </label>
+                    </div>
+                </div>
+                <div class="form-row border-top pt-3 mt-3">
+                    <div class="form-group">
+                        <label class="switch-label">
+                            <input type="checkbox" id="panel-trials">
+                            <span class="custom-switch"></span>
+                            Allow Trials
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="switch-label">
+                            <input type="checkbox" id="panel-migrations">
+                            <span class="custom-switch"></span>
+                            Allow Migrations
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="switch-label">
+                            <input type="checkbox" id="panel-resellers">
+                            <span class="custom-switch"></span>
+                            Allow Resellers
+                        </label>
+                    </div>
+                </div>
+                <div class="form-group mt-3">
+                    <label>Reseller GB Price (Fiat) [0 = Use global default reseller price]</label>
+                    <input type="number" id="panel-reseller-gb-price" step="any" value="0">
+                </div>
+                <div class="form-group mt-3">
+                    <label>Reseller Unlimited Price (Fiat) [0 = Use global default reseller price]</label>
+                    <input type="number" id="panel-reseller-unlimited-price" step="any" value="0">
+                </div>
+
+                <div id="panel-inbounds-diagnostic" style="display: none;" class="mt-3 p-3 bg-dark rounded">
+                    <h5 class="mb-2">Server Inbound Options</h5>
+                    <p class="text-secondary small mb-3">Load/Test connection first to import inbound options from the panel API.</p>
+                    <div class="inbound-grid-selectors">
+                        <div>
+                            <h6>Trial Inbounds</h6>
+                            <div id="panel-inbounds-trial-list" class="inbound-list-box"></div>
+                        </div>
+                        <div>
+                            <h6>Migration Inbounds</h6>
+                            <div id="panel-inbounds-migration-list" class="inbound-list-box"></div>
+                        </div>
+                        <div>
+                            <h6>Reseller Inbounds</h6>
+                            <div id="panel-inbounds-reseller-list" class="inbound-list-box"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-actions-inline mt-4">
+                    <button type="button" id="btn-test-panel" class="btn btn-secondary"><i class="fa-solid fa-plug"></i> Test Connection & Fetch Inbounds</button>
+                    <button type="submit" class="btn btn-primary">Save Server</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: Edit Plan -->
+    <div id="modal-plan" class="modal">
+        <div class="modal-content glass">
+            <span class="close-modal">&times;</span>
+            <h3 id="plan-modal-title">Create Plan</h3>
+            <form id="form-plan" class="mt-3">
+                <input type="hidden" id="plan-id">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Title</label>
+                        <input type="text" id="plan-title" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Assigned Server (Panel)</label>
+                        <select id="plan-panel-id" required>
+                            <!-- Dynamic panels list -->
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="plan-description" rows="2"></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Traffic Limit (GB) [0 = Unlimited]</label>
+                        <input type="number" id="plan-traffic" value="20" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Duration (Days) [0 = Never Expires]</label>
+                        <input type="number" id="plan-duration" value="30" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Max Devices (IP Limit) [0 = Unlimited]</label>
+                        <input type="number" id="plan-limit-ip" value="2" required>
+                    </div>
+                </div>
+                <div class="form-row mt-2">
+                    <div class="form-group">
+                        <label>Card Price (Fiat)</label>
+                        <input type="number" id="plan-price-fiat" step="any" value="50000" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Stars Price (Telegram Stars)</label>
+                        <input type="number" id="plan-price-stars" value="10" required>
+                    </div>
+                    <div class="form-group">
+                        <label>USD Price (Crypto)</label>
+                        <input type="number" id="plan-price-usd" step="any" value="1.00" required>
+                    </div>
+                </div>
+                <div class="form-row mt-3">
+                    <div class="form-group">
+                        <label class="switch-label">
+                            <input type="checkbox" id="plan-active" checked>
+                            <span class="custom-switch"></span>
+                            Active
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="switch-label">
+                            <input type="checkbox" id="plan-trial">
+                            <span class="custom-switch"></span>
+                            Trial Plan
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>Sort Order</label>
+                        <input type="number" id="plan-sort" value="0">
+                    </div>
+                </div>
+
+                <div class="form-group mt-3 border-top pt-3">
+                    <label>Associated Inbound Configurations</label>
+                    <p class="text-secondary small mb-2">Select which protocols/ports from the server to assign to clients buying this plan.</p>
+                    <div id="plan-inbounds-container" class="inbound-list-box full">
+                        <p class="text-center p-3 text-secondary">Select an assigned server (panel) above first to load inbounds.</p>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-block mt-4">Save Plan</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: Edit Reseller Node -->
+    <div id="modal-node" class="modal">
+        <div class="modal-content glass">
+            <span class="close-modal">&times;</span>
+            <h3 id="node-modal-title">Add Reseller Bot Node</h3>
+            <form id="form-node" class="mt-3">
+                <input type="hidden" id="node-id">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Owner Telegram ID</label>
+                        <input type="number" id="node-owner-id" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Bot Name / Brand</label>
+                        <input type="text" id="node-brand" value="Reseller Bot">
+                    </div>
+                </div>
+                <div class="form-group" id="node-token-container">
+                    <label>Bot API Token (from @BotFather)</label>
+                    <input type="password" id="node-token" placeholder="Paste bot token..." required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Support Link / Username</label>
+                        <input type="text" id="node-support" value="@support">
+                    </div>
+                    <div class="form-group">
+                        <label class="switch-label mt-4">
+                            <input type="checkbox" id="node-active" checked>
+                            <span class="custom-switch"></span>
+                            Node Active
+                        </label>
+                    </div>
+                </div>
+                <div class="form-row mt-2">
+                    <div class="form-group">
+                        <label>Card Number</label>
+                        <input type="text" id="node-card-num">
+                    </div>
+                    <div class="form-group">
+                        <label>Card Holder Name</label>
+                        <input type="text" id="node-card-holder">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block mt-4">Save Reseller Node</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- JavaScript code -->
+    <script src="app.js"></script>
+</body>
+</html>
