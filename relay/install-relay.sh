@@ -212,6 +212,7 @@ Group=vpnrelay
 WorkingDirectory=$INSTALL_DIR
 ExecStart=$INSTALL_DIR/.venv/bin/uvicorn main:app --host 127.0.0.1 --port $RELAY_PORT
 EnvironmentFile=$INSTALL_DIR/.env
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 Restart=always
 RestartSec=5
 

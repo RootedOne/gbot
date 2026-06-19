@@ -402,6 +402,8 @@ Group=vpnbot
 WorkingDirectory=$INSTALL_DIR
 ExecStart=$INSTALL_DIR/.venv/bin/python -m bot.main
 EnvironmentFile=$INSTALL_DIR/.env
+Environment=MPLCONFIGDIR=/tmp/matplotlib
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 Restart=always
 RestartSec=5
 
