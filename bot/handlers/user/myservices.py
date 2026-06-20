@@ -27,7 +27,7 @@ from bot.states.forms import CheckoutStates
 from bot.db.models import Plan, Order, Service
 from bot.services import provisioning
 from bot.services.delivery import send_config_links_one_by_one, send_configs
-from bot.services.pricing import amount_for, available_methods
+from bot.services.pricing import adjust_plan_for_reseller, amount_for, available_methods
 from bot.services.provisioning import ProvisioningError
 from bot.utils.format import fmt_expiry, fmt_quota, human_bytes, progress_bar, now_ms
 from bot.utils.qr import make_qr_png
@@ -268,6 +268,8 @@ async def svc_renew(call: CallbackQuery, _: Callable[[str], str]) -> None:
     if not plans:
         await call.answer(_("renew_not_available"), show_alert=True)
         return
+    for p in plans:
+        await adjust_plan_for_reseller(p, call.from_user.id, node_id)
     await call.message.answer(
         _("renew_which_plan"),
         reply_markup=renew_plans_kb(service.id, plans, _),
@@ -276,21 +278,34 @@ async def svc_renew(call: CallbackQuery, _: Callable[[str], str]) -> None:
 
 
 @router.callback_query(F.data.startswith("renewplan:"))
-async def renew_plan_pick(call: CallbackQuery) -> None:
+async def renew_plan_pick(call: CallbackQuery, _: Callable[[str], str] = lambda k: k) -> None:
     _prefix, service_id_raw, plan_id_raw = call.data.split(":")
     service = await repo.get_service(int(service_id_raw))
     plan = await repo.get_plan(int(plan_id_raw))
     if service is None or service.user_tg_id != call.from_user.id or plan is None:
         await call.answer("Not found.", show_alert=True)
         return
+    node_id = getattr(call.bot, "node_id", 0)
+    await adjust_plan_for_reseller(plan, call.from_user.id, node_id)
     methods = available_methods(plan)
-    if not methods:
+    
+    balance = await repo.get_balance(call.from_user.id, node_id=node_id)
+    can_pay_with_balance = bool(plan.price_fiat) and balance >= float(plan.price_fiat)
+    
+    if not methods and not can_pay_with_balance:
         await call.answer("No payment methods for this plan.", show_alert=True)
         return
-    # Reuse the buy flow but tag the order with renew_service_id via a dedicated cb.
+        
     from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from bot.config import get_settings
+    settings = get_settings()
 
     builder = InlineKeyboardBuilder()
+    if can_pay_with_balance:
+        builder.button(
+            text=_("btn_pay_balance"),
+            callback_data=f"rbuy:{service.id}:{plan.id}:wallet"
+        )
     labels = {
         PaymentMethod.card: "💳 Card-to-card",
         PaymentMethod.stars: "⭐ Telegram Stars",
@@ -302,16 +317,33 @@ async def renew_plan_pick(call: CallbackQuery) -> None:
             callback_data=f"rbuy:{service.id}:{plan.id}:{method.value}",
         )
     builder.adjust(1)
-    await call.message.edit_text(
+    
+    price_parts = []
+    if plan.price_fiat:
+        price_parts.append(f"💳 Card: {int(plan.price_fiat):,} {settings.fiat_currency}")
+    if plan.price_stars:
+        price_parts.append(f"⭐ Stars: {int(plan.price_stars)}")
+    if plan.price_usd:
+        price_parts.append(f"🪙 Crypto: ${plan.price_usd:g}")
+        
+    price_line = " / ".join(price_parts)
+    caption = (
         f"🔄 Renew <code>{service.email}</code> with <b>{plan.title}</b>.\n"
-        "Choose a payment method:",
+        f"💵 Price: {price_line}\n"
+    )
+    if can_pay_with_balance:
+        caption += f"💰 Your balance: {int(balance):,} {settings.fiat_currency}\n"
+    caption += "\nChoose a payment method:"
+    
+    await call.message.edit_text(
+        caption,
         reply_markup=builder.as_markup(),
     )
     await call.answer()
 
 
 @router.callback_query(F.data.startswith("rbuy:"))
-async def renew_buy(call: CallbackQuery, bot: Bot, state: FSMContext) -> None:
+async def renew_buy(call: CallbackQuery, bot: Bot, state: FSMContext, _: Callable[[str], str] = lambda k: k) -> None:
     _prefix, service_id_raw, plan_id_raw, method_raw = call.data.split(":")
     service = await repo.get_service(int(service_id_raw))
     plan = await repo.get_plan(int(plan_id_raw))
@@ -323,8 +355,49 @@ async def renew_buy(call: CallbackQuery, bot: Bot, state: FSMContext) -> None:
     except ValueError:
         await call.answer("Unknown method.", show_alert=True)
         return
-    amount, currency = amount_for(plan, method)
     node_id = getattr(bot, "node_id", 0)
+    await adjust_plan_for_reseller(plan, call.from_user.id, node_id)
+    amount, currency = amount_for(plan, method)
+    
+    if method == PaymentMethod.wallet:
+        from bot.config import get_settings
+        from bot.db.repo import InsufficientBalance
+        
+        balance = await repo.get_balance(call.from_user.id, node_id=node_id)
+        if balance < amount:
+            await call.answer(
+                _("insufficient_balance", current=int(balance), price=int(amount), currency=currency),
+                show_alert=True,
+            )
+            return
+        try:
+            await repo.adjust_balance(
+                call.from_user.id, -amount, reason=f"Renewal: svc #{service.id} to plan #{plan.id}", node_id=node_id
+            )
+        except InsufficientBalance:
+            await call.answer(_("insufficient_balance_short"), show_alert=True)
+            return
+        order = await repo.create_order(
+            user_tg_id=call.from_user.id,
+            plan_id=plan.id,
+            method=PaymentMethod.wallet,
+            amount=amount,
+            currency=currency,
+            renew_service_id=service.id,
+            status=OrderStatus.pending,
+            node_id=node_id,
+        )
+        await call.message.answer(_("paid_from_balance"))
+        ok = await fulfill_order(bot, order)
+        if not ok:
+            # refund on provisioning failure
+            await repo.adjust_balance(
+                call.from_user.id, amount, reason=f"Refund: Renewal failed for svc #{service.id} (order #{order.id})", node_id=node_id
+            )
+            await call.message.answer(_("provision_failed_refund"))
+        await call.answer()
+        return
+
     order = await repo.create_order(
         user_tg_id=call.from_user.id,
         plan_id=plan.id,
@@ -391,7 +464,14 @@ async def svc_delete_execute(call: CallbackQuery, _: Callable[[str], str]) -> No
     await call.message.edit_text(_("service_deleted"))
 
 
-async def get_upgrade_details(service: Service, new_plan: Plan, method: PaymentMethod) -> dict:
+async def get_upgrade_details(
+    service: Service,
+    new_plan: Plan,
+    method: PaymentMethod,
+    user_tg_id: int,
+    node_id: int = 0
+) -> dict:
+    await adjust_plan_for_reseller(new_plan, user_tg_id, node_id)
     new_price, currency = amount_for(new_plan, method)
     old_plan = await repo.get_plan(service.plan_id) if service.plan_id else None
     
@@ -401,6 +481,7 @@ async def get_upgrade_details(service: Service, new_plan: Plan, method: PaymentM
     remaining_val = 0.0
     
     if old_plan:
+        await adjust_plan_for_reseller(old_plan, user_tg_id, node_id)
         old_price, _ = amount_for(old_plan, method)
         remaining = await provisioning.compute_remaining(service)
         
@@ -470,7 +551,7 @@ async def upgrade_plan_pick(call: CallbackQuery, _: Callable[[str], str]) -> Non
         await call.answer("Not found.", show_alert=True)
         return
 
-    details = await get_upgrade_details(service, plan, PaymentMethod.card)
+    details = await get_upgrade_details(service, plan, PaymentMethod.card, call.from_user.id, node_id)
     amount_to_pay = details["amount_to_pay"]
     currency = details["currency"]
 
@@ -581,7 +662,8 @@ async def upgrade_buy(call: CallbackQuery, bot: Bot, state: FSMContext, _: Calla
         await call.answer("Unknown method.", show_alert=True)
         return
 
-    details = await get_upgrade_details(service, plan, method)
+    node_id = getattr(bot, "node_id", 0)
+    details = await get_upgrade_details(service, plan, method, call.from_user.id, node_id)
     amount = details["amount_to_pay"]
     currency = details["currency"]
 
@@ -623,10 +705,31 @@ async def upgrade_buy(call: CallbackQuery, bot: Bot, state: FSMContext, _: Calla
 
 # --- Buying Extra GB & Time ---
 
-def calculate_addon_price_and_currency(plan: Optional[Plan], kind: str, qty: float, method: PaymentMethod) -> tuple[float, str]:
+async def calculate_addon_price_and_currency(
+    plan: Optional[Plan],
+    kind: str,
+    qty: float,
+    method: PaymentMethod,
+    user_tg_id: int,
+    node_id: int = 0
+) -> tuple[float, str]:
     from bot.config import get_settings
     settings = get_settings()
     
+    if node_id == 0:
+        from bot.db import repo
+        user = await repo.get_user(user_tg_id, 0)
+        if user and user.is_reseller:
+            if method in (PaymentMethod.card, PaymentMethod.wallet):
+                if kind == "extra_gb":
+                    panel_id = plan.panel_id if plan else None
+                    gb_price = await repo.get_reseller_gb_price(user_tg_id, panel_id)
+                    return float(qty * gb_price), settings.fiat_currency
+                elif kind == "extra_time":
+                    day_price = float(getattr(user, "reseller_day_price", 0.0))
+                    return float(qty * day_price), settings.fiat_currency
+            return 0.0, "USD" if method == PaymentMethod.crypto else "XTR"
+
     # 1. Strict mode package pricing lookup
     if plan:
         mode = plan.extra_gb_mode if kind == "extra_gb" else plan.extra_time_mode
@@ -673,15 +776,23 @@ def calculate_addon_price_and_currency(plan: Optional[Plan], kind: str, qty: flo
     return 0.0, settings.fiat_currency
 
 
-async def _show_addon_checkout(target_message: Message, service: Service, kind: str, qty: float, _: Callable[[str], str]) -> None:
+async def _show_addon_checkout(
+    target_message: Message,
+    user_tg_id: int,
+    service: Service,
+    kind: str,
+    qty: float,
+    _: Callable[[str], str]
+) -> None:
     from bot.config import get_settings
     settings = get_settings()
     plan = await repo.get_plan(service.plan_id) if service.plan_id else None
+    node_id = getattr(target_message.bot, "node_id", 0)
     
     # Calculate price per currency
-    price_fiat, fiat_currency = calculate_addon_price_and_currency(plan, kind, qty, PaymentMethod.card)
-    price_stars, stars_currency = calculate_addon_price_and_currency(plan, kind, qty, PaymentMethod.stars)
-    price_usd, usd_currency = calculate_addon_price_and_currency(plan, kind, qty, PaymentMethod.crypto)
+    price_fiat, fiat_currency = await calculate_addon_price_and_currency(plan, kind, qty, PaymentMethod.card, user_tg_id, node_id)
+    price_stars, stars_currency = await calculate_addon_price_and_currency(plan, kind, qty, PaymentMethod.stars, user_tg_id, node_id)
+    price_usd, usd_currency = await calculate_addon_price_and_currency(plan, kind, qty, PaymentMethod.crypto, user_tg_id, node_id)
     
     methods = []
     if price_fiat > 0 and settings.card_number:
@@ -691,8 +802,7 @@ async def _show_addon_checkout(target_message: Message, service: Service, kind: 
     if price_usd > 0 and settings.crypto_enabled:
         methods.append(PaymentMethod.crypto)
         
-    node_id = getattr(target_message.bot, "node_id", 0)
-    balance = await repo.get_balance(target_message.from_user.id, node_id=node_id)
+    balance = await repo.get_balance(user_tg_id, node_id=node_id)
     can_pay_with_balance = price_fiat > 0 and balance >= price_fiat
     
     unit = "GB" if kind == "extra_gb" else _("days_label")
@@ -733,12 +843,12 @@ async def _pay_addon_with_balance(call: CallbackQuery, bot: Bot, service_id: int
     service = await repo.get_service(service_id)
     plan = await repo.get_plan(service.plan_id) if (service and service.plan_id) else None
     
-    price, currency = calculate_addon_price_and_currency(plan, kind, qty, PaymentMethod.wallet)
+    node_id = getattr(bot, "node_id", 0)
+    price, currency = await calculate_addon_price_and_currency(plan, kind, qty, PaymentMethod.wallet, call.from_user.id, node_id)
     if price <= 0:
         await call.answer("This addon cannot be paid from balance.", show_alert=True)
         return
     
-    node_id = getattr(bot, "node_id", 0)
     balance = await repo.get_balance(call.from_user.id, node_id=node_id)
     if balance < price:
         await call.answer(
@@ -821,7 +931,7 @@ async def svc_buy_gb_pkg(call: CallbackQuery, _: Callable[[str], str]) -> None:
         return
         
     await call.answer()
-    await _show_addon_checkout(call.message, service, "extra_gb", gb, _)
+    await _show_addon_checkout(call.message, service.user_tg_id, service, "extra_gb", gb, _)
 
 
 @router.callback_query(F.data.startswith("svc:buy_time_pkg:"))
@@ -836,7 +946,7 @@ async def svc_buy_time_pkg(call: CallbackQuery, _: Callable[[str], str]) -> None
         return
         
     await call.answer()
-    await _show_addon_checkout(call.message, service, "extra_time", days, _)
+    await _show_addon_checkout(call.message, service.user_tg_id, service, "extra_time", days, _)
 
 
 @router.callback_query(F.data.startswith("svc:buy_custom_gb:"))
@@ -908,7 +1018,7 @@ async def process_custom_gb_input(message: Message, state: FSMContext, _: Callab
         return
 
     await state.clear()
-    await _show_addon_checkout(message, service, "extra_gb", qty, _)
+    await _show_addon_checkout(message, service.user_tg_id, service, "extra_gb", qty, _)
 
 
 @router.message(CheckoutStates.entering_extra_days)
@@ -942,7 +1052,7 @@ async def process_custom_days_input(message: Message, state: FSMContext, _: Call
         return
 
     await state.clear()
-    await _show_addon_checkout(message, service, "extra_time", float(qty), _)
+    await _show_addon_checkout(message, service.user_tg_id, service, "extra_time", float(qty), _)
 
 
 @router.callback_query(F.data.startswith("abuy:"))
@@ -969,7 +1079,8 @@ async def addon_buy_handler(call: CallbackQuery, bot: Bot, state: FSMContext, _:
         return
     
     plan = await repo.get_plan(service.plan_id) if service.plan_id else None
-    amount, currency = calculate_addon_price_and_currency(plan, kind, qty, method)
+    node_id = getattr(bot, "node_id", 0)
+    amount, currency = await calculate_addon_price_and_currency(plan, kind, qty, method, call.from_user.id, node_id)
     if amount <= 0:
         await call.answer(_("method_unavailable"), show_alert=True)
         return

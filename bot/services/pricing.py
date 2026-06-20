@@ -22,7 +22,7 @@ def available_methods(plan: Plan) -> List[PaymentMethod]:
 def amount_for(plan: Plan, method: PaymentMethod) -> Tuple[float, str]:
     """Return (amount, currency_label) for a plan + method."""
     settings = get_settings()
-    if method == PaymentMethod.card:
+    if method in (PaymentMethod.card, PaymentMethod.wallet):
         return float(plan.price_fiat), settings.fiat_currency
     if method == PaymentMethod.stars:
         return float(plan.price_stars), "XTR"
@@ -58,3 +58,23 @@ def plan_caption(plan: Plan) -> str:
         f"💵 Price: {price_summary(plan)}",
     ]
     return "\n".join(line for line in lines if line is not None)
+
+
+async def adjust_plan_for_reseller(plan: Plan, user_tg_id: int, node_id: int = 0) -> None:
+    """If the bot is the main bot (node_id == 0) and the user is a reseller,
+    override the plan's prices to reflect the reseller wholesale pricing.
+    """
+    if node_id == 0:
+        from bot.db import repo
+        user = await repo.get_user(user_tg_id, 0)
+        if user and user.is_reseller:
+            if plan.traffic_gb == 0:
+                reseller_price = await repo.get_reseller_unlimited_price(user_tg_id, plan.panel_id)
+            else:
+                gb_price = await repo.get_reseller_gb_price(user_tg_id, plan.panel_id)
+                reseller_price = float(plan.traffic_gb * gb_price)
+            
+            plan.price_fiat = reseller_price
+            plan.price_stars = 0
+            plan.price_usd = 0.0
+

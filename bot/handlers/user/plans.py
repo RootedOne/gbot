@@ -8,7 +8,7 @@ from aiogram.types import CallbackQuery, Message
 from bot.db import repo
 from bot.db.models import Plan
 from bot.keyboards.user_kb import plan_detail_kb, plans_kb
-from bot.services.pricing import available_methods, plan_caption
+from bot.services.pricing import adjust_plan_for_reseller, available_methods, plan_caption
 from bot.states.forms import CheckoutStates
 
 router = Router(name="user-plans")
@@ -49,8 +49,9 @@ async def plan_detail_cb(call: CallbackQuery, _: Callable[[str], str]) -> None:
     if plan is None or not plan.is_active:
         await call.answer(_("plan_not_found"), show_alert=True)
         return
-    methods = available_methods(plan)
     node_id = getattr(call.bot, "node_id", 0)
+    await adjust_plan_for_reseller(plan, call.from_user.id, node_id)
+    methods = available_methods(plan)
     balance = await repo.get_balance(call.from_user.id, node_id=node_id)
     can_pay_with_balance = bool(plan.price_fiat) and balance >= float(plan.price_fiat)
     if not methods and not can_pay_with_balance:
@@ -81,6 +82,8 @@ async def plan_bulk_cb(call: CallbackQuery, _: Callable[[str], str]) -> None:
     if plan is None or not plan.is_active:
         await call.answer(_("plan_not_found"), show_alert=True)
         return
+    node_id = getattr(call.bot, "node_id", 0)
+    await adjust_plan_for_reseller(plan, call.from_user.id, node_id)
     from bot.keyboards.user_kb import bulk_qty_kb
     await call.message.edit_text(
         _("bulk_title", title=plan.title),
@@ -99,6 +102,8 @@ async def bulk_qty_select_cb(call: CallbackQuery, state: FSMContext, _: Callable
     if plan is None or not plan.is_active:
         await call.answer(_("plan_not_found"), show_alert=True)
         return
+    node_id = getattr(call.bot, "node_id", 0)
+    await adjust_plan_for_reseller(plan, call.from_user.id, node_id)
         
     if qty_str == "custom":
         from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -167,6 +172,9 @@ async def custom_bulk_qty_handler(message: Message, state: FSMContext, _: Callab
     if plan is None or not plan.is_active:
         await message.answer(_("plan_not_found"))
         return
+        
+    node_id = getattr(message.bot, "node_id", 0)
+    await adjust_plan_for_reseller(plan, message.from_user.id, node_id)
         
     await _show_bulk_checkout_methods_new_message(message, plan, qty, _)
 

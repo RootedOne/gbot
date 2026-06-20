@@ -12,7 +12,7 @@ from bot.db import repo
 from bot.db.models import OrderStatus, PaymentMethod
 from bot.payments.base import get_provider
 from bot.services.fulfillment import fulfill_order
-from bot.services.pricing import amount_for
+from bot.services.pricing import adjust_plan_for_reseller, amount_for
 from bot.states.forms import CheckoutStates
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,8 @@ async def buy_cb(call: CallbackQuery, state: FSMContext, bot: Bot, _: Callable[[
     if plan is None or not plan.is_active:
         await call.answer(_("plan_not_found"), show_alert=True)
         return
+    node_id = getattr(bot, "node_id", 0)
+    await adjust_plan_for_reseller(plan, call.from_user.id, node_id)
     try:
         method = PaymentMethod(method_raw)
     except ValueError:
@@ -65,6 +67,8 @@ async def bulk_buy_cb(call: CallbackQuery, state: FSMContext, bot: Bot, _: Calla
     if plan is None or not plan.is_active:
         await call.answer(_("plan_not_found"), show_alert=True)
         return
+    node_id = getattr(bot, "node_id", 0)
+    await adjust_plan_for_reseller(plan, call.from_user.id, node_id)
     try:
         qty = int(qty_raw)
         if qty < 1 or qty > 100:
