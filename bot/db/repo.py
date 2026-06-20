@@ -283,6 +283,8 @@ async def create_order(
     extra_gb: Optional[float] = None,
     extra_days: Optional[int] = None,
     quantity: int = 1,
+    promo_code: Optional[str] = None,
+    discount_amount: float = 0.0,
 ) -> Order:
     async with async_session_factory() as session:
         order = Order(
@@ -298,6 +300,8 @@ async def create_order(
             extra_gb=extra_gb,
             extra_days=extra_days,
             quantity=quantity,
+            promo_code=promo_code,
+            discount_amount=discount_amount,
         )
         session.add(order)
         await session.commit()
