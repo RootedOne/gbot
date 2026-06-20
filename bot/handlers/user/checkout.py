@@ -12,8 +12,9 @@ from bot.db import repo
 from bot.db.models import OrderStatus, PaymentMethod
 from bot.payments.base import get_provider
 from bot.services.fulfillment import fulfill_order
-from bot.services.pricing import adjust_plan_for_reseller, amount_for
+from bot.services.pricing import adjust_plan_for_reseller, amount_for, adjust_plan_for_promo
 from bot.states.forms import CheckoutStates
+import time
 
 logger = logging.getLogger(__name__)
 router = Router(name="user-checkout")
@@ -34,8 +35,22 @@ async def buy_cb(call: CallbackQuery, state: FSMContext, bot: Bot, _: Callable[[
         await call.answer(_("unknown_method"), show_alert=True)
         return
 
+    state_data = await state.get_data()
+    applied_promo = state_data.get("applied_promo_code")
+    discount_amount = 0.0
+    promo_code_str = None
+    if applied_promo:
+        promo = await repo.get_promo_code_by_code(applied_promo, node_id=node_id)
+        if promo and promo.is_active:
+            if promo.expiry_time is None or promo.expiry_time > int(time.time() * 1000):
+                if promo.max_uses is None or promo.used_count < promo.max_uses:
+                    if not await repo.has_user_used_promo(call.from_user.id, promo.code, node_id=node_id):
+                        discount_amount = adjust_plan_for_promo(plan, promo)
+                        promo_code_str = promo.code
+
     if method == PaymentMethod.wallet:
-        await _pay_with_balance(call, bot, plan, _)
+        await _pay_with_balance(call, bot, plan, promo_code_str, discount_amount, _)
+        await state.update_data(applied_promo_code=None)
         return
 
     amount, currency = amount_for(plan, method)
@@ -52,8 +67,11 @@ async def buy_cb(call: CallbackQuery, state: FSMContext, bot: Bot, _: Callable[[
         currency=currency,
         status=OrderStatus.pending,
         node_id=node_id,
+        promo_code=promo_code_str,
+        discount_amount=discount_amount,
     )
 
+    await state.update_data(applied_promo_code=None)
     provider = get_provider(method)
     await call.message.answer(_("preparing_order"))
     await provider.start_checkout(bot, call.from_user.id, order, plan, state)
@@ -82,8 +100,22 @@ async def bulk_buy_cb(call: CallbackQuery, state: FSMContext, bot: Bot, _: Calla
         await call.answer(_("unknown_method"), show_alert=True)
         return
 
+    state_data = await state.get_data()
+    applied_promo = state_data.get("applied_promo_code")
+    discount_amount = 0.0
+    promo_code_str = None
+    if applied_promo:
+        promo = await repo.get_promo_code_by_code(applied_promo, node_id=node_id)
+        if promo and promo.is_active:
+            if promo.expiry_time is None or promo.expiry_time > int(time.time() * 1000):
+                if promo.max_uses is None or promo.used_count < promo.max_uses:
+                    if not await repo.has_user_used_promo(call.from_user.id, promo.code, node_id=node_id):
+                        discount_amount = adjust_plan_for_promo(plan, promo) * qty
+                        promo_code_str = promo.code
+
     if method == PaymentMethod.wallet:
-        await _bulk_pay_with_balance(call, bot, plan, qty, _)
+        await _bulk_pay_with_balance(call, bot, plan, qty, promo_code_str, discount_amount, _)
+        await state.update_data(applied_promo_code=None)
         return
 
     base_amount, currency = amount_for(plan, method)
@@ -102,15 +134,26 @@ async def bulk_buy_cb(call: CallbackQuery, state: FSMContext, bot: Bot, _: Calla
         status=OrderStatus.pending,
         node_id=node_id,
         quantity=qty,
+        promo_code=promo_code_str,
+        discount_amount=discount_amount,
     )
 
+    await state.update_data(applied_promo_code=None)
     provider = get_provider(method)
     await call.message.answer(_("preparing_order"))
     await provider.start_checkout(bot, call.from_user.id, order, plan, state)
     await call.answer()
 
 
-async def _bulk_pay_with_balance(call: CallbackQuery, bot: Bot, plan, qty: int, _: Callable[[str], str]) -> None:
+async def _bulk_pay_with_balance(
+    call: CallbackQuery,
+    bot: Bot,
+    plan,
+    qty: int,
+    promo_code: Optional[str],
+    discount_amount: float,
+    _: Callable[[str], str]
+) -> None:
     from bot.config import get_settings
     from bot.db.models import OrderKind
     from bot.db.repo import InsufficientBalance
@@ -147,6 +190,8 @@ async def _bulk_pay_with_balance(call: CallbackQuery, bot: Bot, plan, qty: int, 
         kind=OrderKind.plan,
         node_id=node_id,
         quantity=qty,
+        promo_code=promo_code,
+        discount_amount=discount_amount,
     )
     await call.message.answer(_("paid_from_balance"))
     ok = await fulfill_order(bot, order)
@@ -159,7 +204,14 @@ async def _bulk_pay_with_balance(call: CallbackQuery, bot: Bot, plan, qty: int, 
     await call.answer()
 
 
-async def _pay_with_balance(call: CallbackQuery, bot: Bot, plan, _: Callable[[str], str]) -> None:
+async def _pay_with_balance(
+    call: CallbackQuery,
+    bot: Bot,
+    plan,
+    promo_code: Optional[str],
+    discount_amount: float,
+    _: Callable[[str], str]
+) -> None:
     from bot.config import get_settings
     from bot.db.models import OrderKind
     from bot.db.repo import InsufficientBalance
@@ -195,6 +247,8 @@ async def _pay_with_balance(call: CallbackQuery, bot: Bot, plan, _: Callable[[st
         status=OrderStatus.pending,
         kind=OrderKind.plan,
         node_id=node_id,
+        promo_code=promo_code,
+        discount_amount=discount_amount,
     )
     await call.message.answer(_("paid_from_balance"))
     ok = await fulfill_order(bot, order)
@@ -256,11 +310,16 @@ async def _notify_admins_receipt(
         qty = getattr(order, "quantity", 1) or 1
         qty_str = f" ({qty}x)" if qty > 1 else ""
         what = f"Plan: {plan.title if plan else '?'}{qty_str}"
+    promo_line = ""
+    if order and order.promo_code:
+        promo_line = f"\n🎟 Promo Code: <b>{order.promo_code}</b> (-{int(order.discount_amount):,} {order.currency})"
+
     caption = (
         f"🧾 <b>New receipt — order #{order_id}</b>\n"
         f"User: <code>{user_id}</code>\n"
         f"{what}\n"
         f"{amount_line}"
+        f"{promo_line}"
     )
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Approve", callback_data=f"adm:order:approve:{order_id}")

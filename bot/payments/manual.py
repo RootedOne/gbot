@@ -36,8 +36,13 @@ class ManualReceiptProvider(PaymentProvider):
             if plan is not None
             else "Your balance is credited automatically once an admin approves it."
         )
+        promo_line = ""
+        if order.promo_code:
+            promo_line = f"🎟 <b>Promo Code:</b> {order.promo_code} applied (-{int(order.discount_amount):,} {order.currency})\n\n"
+
         text = (
             f"🧾 <b>Order #{order.id}</b> — {what}\n\n"
+            f"{promo_line}"
             f"💳 Please transfer <b>{int(order.amount):,} {order.currency}</b> to:\n\n"
             f"<b>Card:</b> <code>{settings.card_number}</code>\n"
             f"<b>Holder:</b> {settings.card_holder}\n\n"

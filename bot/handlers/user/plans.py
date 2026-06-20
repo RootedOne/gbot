@@ -8,8 +8,10 @@ from aiogram.types import CallbackQuery, Message
 from bot.db import repo
 from bot.db.models import Plan
 from bot.keyboards.user_kb import plan_detail_kb, plans_kb
-from bot.services.pricing import adjust_plan_for_reseller, available_methods, plan_caption
+import time
+from bot.services.pricing import adjust_plan_for_reseller, available_methods, plan_caption, adjust_plan_for_promo
 from bot.states.forms import CheckoutStates
+
 
 router = Router(name="user-plans")
 
@@ -29,7 +31,8 @@ async def buy_plan_entry(message: Message, _: Callable[[str], str]) -> None:
 
 
 @router.callback_query(F.data == "plans:list")
-async def plans_list_cb(call: CallbackQuery, _: Callable[[str], str]) -> None:
+async def plans_list_cb(call: CallbackQuery, state: FSMContext, _: Callable[[str], str]) -> None:
+    await state.clear()
     node_id = getattr(call.bot, "node_id", 0)
     plans = await repo.list_plans(only_active=True, node_id=node_id)
     if not plans:
@@ -42,37 +45,72 @@ async def plans_list_cb(call: CallbackQuery, _: Callable[[str], str]) -> None:
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("plan:"))
-async def plan_detail_cb(call: CallbackQuery, _: Callable[[str], str]) -> None:
-    plan_id = int(call.data.split(":", 1)[1])
+async def _show_plan_details(target: Message | CallbackQuery, plan_id: int, state: FSMContext, _: Callable[[str], str]) -> None:
     plan = await repo.get_plan(plan_id)
     if plan is None or not plan.is_active:
-        await call.answer(_("plan_not_found"), show_alert=True)
+        if isinstance(target, CallbackQuery):
+            await target.answer(_("plan_not_found"), show_alert=True)
+        else:
+            await target.answer(_("plan_not_found"))
         return
-    node_id = getattr(call.bot, "node_id", 0)
-    await adjust_plan_for_reseller(plan, call.from_user.id, node_id)
+        
+    bot = target.bot
+    node_id = getattr(bot, "node_id", 0)
+    user_id = target.from_user.id
+    
+    await adjust_plan_for_reseller(plan, user_id, node_id)
+    
+    state_data = await state.get_data()
+    applied_promo = state_data.get("applied_promo_code")
+    discount_amount = 0.0
+    promo_code_str = None
+    
+    if applied_promo:
+        promo = await repo.get_promo_code_by_code(applied_promo, node_id=node_id)
+        if promo and promo.is_active:
+            if promo.expiry_time is None or promo.expiry_time > int(time.time() * 1000):
+                if promo.max_uses is None or promo.used_count < promo.max_uses:
+                    if not await repo.has_user_used_promo(user_id, promo.code, node_id=node_id):
+                        discount_amount = adjust_plan_for_promo(plan, promo)
+                        promo_code_str = promo.code
+                    else:
+                        await state.update_data(applied_promo_code=None)
+                else:
+                    await state.update_data(applied_promo_code=None)
+            else:
+                await state.update_data(applied_promo_code=None)
+        else:
+            await state.update_data(applied_promo_code=None)
+            
     methods = available_methods(plan)
-    balance = await repo.get_balance(call.from_user.id, node_id=node_id)
+    balance = await repo.get_balance(user_id, node_id=node_id)
     can_pay_with_balance = bool(plan.price_fiat) and balance >= float(plan.price_fiat)
-    if not methods and not can_pay_with_balance:
-        await call.message.edit_text(
-            plan_caption(plan)
-            + "\n\n⚠️ No payment methods are configured for this plan yet.",
-        )
-        await call.answer()
-        return
+    
     caption = plan_caption(plan)
+    if promo_code_str:
+        from bot.config import get_settings
+        cur = get_settings().fiat_currency
+        caption += _("promo_discount_line", code=promo_code_str, discount=f"{int(discount_amount):,} {cur}")
+        
     if can_pay_with_balance:
         from bot.config import get_settings
-
         caption += (
             f"\n\n💰 Your balance: {int(balance):,} {get_settings().fiat_currency}"
         )
-    await call.message.edit_text(
-        caption,
-        reply_markup=plan_detail_kb(plan, methods, can_pay_with_balance, _),
-    )
-    await call.answer()
+        
+    kb = plan_detail_kb(plan, methods, can_pay_with_balance, promo_code_str, _)
+    
+    if isinstance(target, CallbackQuery):
+        await target.message.edit_text(caption, reply_markup=kb)
+        await target.answer()
+    else:
+        await target.answer(caption, reply_markup=kb)
+
+
+@router.callback_query(F.data.regexp(r"^plan:\d+$"))
+async def plan_detail_cb(call: CallbackQuery, state: FSMContext, _: Callable[[str], str]) -> None:
+    plan_id = int(call.data.split(":", 1)[1])
+    await _show_plan_details(call, plan_id, state, _)
 
 
 @router.callback_query(F.data.startswith("plan_bulk:"))
@@ -120,10 +158,33 @@ async def bulk_qty_select_cb(call: CallbackQuery, state: FSMContext, _: Callable
     await _show_bulk_checkout_methods(call, plan, qty, _)
 
 
-async def _show_bulk_checkout_methods(call: CallbackQuery, plan: Plan, qty: int, _: Callable[[str], str]) -> None:
+async def _show_bulk_checkout_methods(call: CallbackQuery, plan: Plan, qty: int, state: FSMContext, _: Callable[[str], str]) -> None:
     methods = available_methods(plan)
     node_id = getattr(call.bot, "node_id", 0)
     balance = await repo.get_balance(call.from_user.id, node_id=node_id)
+    
+    state_data = await state.get_data()
+    applied_promo = state_data.get("applied_promo_code")
+    discount_amount = 0.0
+    promo_code_str = None
+    
+    if applied_promo:
+        promo = await repo.get_promo_code_by_code(applied_promo, node_id=node_id)
+        if promo and promo.is_active:
+            if promo.expiry_time is None or promo.expiry_time > int(time.time() * 1000):
+                if promo.max_uses is None or promo.used_count < promo.max_uses:
+                    if not await repo.has_user_used_promo(call.from_user.id, promo.code, node_id=node_id):
+                        discount_amount = adjust_plan_for_promo(plan, promo) * qty
+                        promo_code_str = promo.code
+                    else:
+                        await state.update_data(applied_promo_code=None)
+                else:
+                    await state.update_data(applied_promo_code=None)
+            else:
+                await state.update_data(applied_promo_code=None)
+        else:
+            await state.update_data(applied_promo_code=None)
+
     total_fiat_price = float(plan.price_fiat or 0) * qty
     can_pay_with_balance = bool(plan.price_fiat) and balance >= total_fiat_price
     
@@ -139,13 +200,16 @@ async def _show_bulk_checkout_methods(call: CallbackQuery, plan: Plan, qty: int,
         total_usd = plan.price_usd * qty
         caption += f"\n🪙 Price: {total_usd:,} USD (for {qty}x)"
         
+    if promo_code_str:
+        caption += _("promo_discount_line", code=promo_code_str, discount=f"{int(discount_amount):,} {s.fiat_currency}")
+        
     if can_pay_with_balance:
         caption += f"\n\n💰 Your balance: {int(balance):,} {s.fiat_currency}"
         
     from bot.keyboards.user_kb import bulk_payment_kb
     await call.message.edit_text(
         caption,
-        reply_markup=bulk_payment_kb(plan.id, qty, methods, can_pay_with_balance, _),
+        reply_markup=bulk_payment_kb(plan.id, qty, methods, can_pay_with_balance, promo_code_str, _),
     )
     await call.answer()
 
@@ -179,10 +243,33 @@ async def custom_bulk_qty_handler(message: Message, state: FSMContext, _: Callab
     await _show_bulk_checkout_methods_new_message(message, plan, qty, _)
 
 
-async def _show_bulk_checkout_methods_new_message(message: Message, plan: Plan, qty: int, _: Callable[[str], str]) -> None:
+async def _show_bulk_checkout_methods_new_message(message: Message, plan: Plan, qty: int, state: FSMContext, _: Callable[[str], str]) -> None:
     methods = available_methods(plan)
     node_id = getattr(message.bot, "node_id", 0)
     balance = await repo.get_balance(message.from_user.id, node_id=node_id)
+    
+    state_data = await state.get_data()
+    applied_promo = state_data.get("applied_promo_code")
+    discount_amount = 0.0
+    promo_code_str = None
+    
+    if applied_promo:
+        promo = await repo.get_promo_code_by_code(applied_promo, node_id=node_id)
+        if promo and promo.is_active:
+            if promo.expiry_time is None or promo.expiry_time > int(time.time() * 1000):
+                if promo.max_uses is None or promo.used_count < promo.max_uses:
+                    if not await repo.has_user_used_promo(message.from_user.id, promo.code, node_id=node_id):
+                        discount_amount = adjust_plan_for_promo(plan, promo) * qty
+                        promo_code_str = promo.code
+                    else:
+                        await state.update_data(applied_promo_code=None)
+                else:
+                    await state.update_data(applied_promo_code=None)
+            else:
+                await state.update_data(applied_promo_code=None)
+        else:
+            await state.update_data(applied_promo_code=None)
+
     total_fiat_price = float(plan.price_fiat or 0) * qty
     can_pay_with_balance = bool(plan.price_fiat) and balance >= total_fiat_price
     
@@ -198,11 +285,120 @@ async def _show_bulk_checkout_methods_new_message(message: Message, plan: Plan, 
         total_usd = plan.price_usd * qty
         caption += f"\n🪙 Price: {total_usd:,} USD (for {qty}x)"
         
+    if promo_code_str:
+        caption += _("promo_discount_line", code=promo_code_str, discount=f"{int(discount_amount):,} {s.fiat_currency}")
+        
     if can_pay_with_balance:
         caption += f"\n\n💰 Your balance: {int(balance):,} {s.fiat_currency}"
         
     from bot.keyboards.user_kb import bulk_payment_kb
     await message.answer(
         caption,
-        reply_markup=bulk_payment_kb(plan.id, qty, methods, can_pay_with_balance, _),
+        reply_markup=bulk_payment_kb(plan.id, qty, methods, can_pay_with_balance, promo_code_str, _),
     )
+
+
+# --------------------------- Promo Code Applying (FSM) ---------------------------
+
+@router.callback_query(F.data.startswith("plan:promo_apply:"))
+async def user_promo_apply_cb(call: CallbackQuery, state: FSMContext, _: Callable[[str], str]) -> None:
+    plan_id = int(call.data.split(":")[2])
+    await state.set_state(CheckoutStates.awaiting_promo_code)
+    await state.update_data(plan_id=plan_id, bulk_qty=None)
+    await call.message.answer(_("enter_promo_code"))
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("plan:promo_clear:"))
+async def user_promo_clear_cb(call: CallbackQuery, state: FSMContext, _: Callable[[str], str]) -> None:
+    plan_id = int(call.data.split(":")[2])
+    await state.update_data(applied_promo_code=None)
+    await _show_plan_details(call, plan_id, state, _)
+
+
+@router.callback_query(F.data.startswith("bulk:promo_apply:"))
+async def user_bulk_promo_apply_cb(call: CallbackQuery, state: FSMContext, _: Callable[[str], str]) -> None:
+    parts = call.data.split(":")
+    plan_id = int(parts[2])
+    qty = int(parts[3])
+    await state.set_state(CheckoutStates.awaiting_promo_code)
+    await state.update_data(plan_id=plan_id, bulk_qty=qty)
+    await call.message.answer(_("enter_promo_code"))
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("bulk:promo_clear:"))
+async def user_bulk_promo_clear_cb(call: CallbackQuery, state: FSMContext, _: Callable[[str], str]) -> None:
+    parts = call.data.split(":")
+    plan_id = int(parts[2])
+    qty = int(parts[3])
+    await state.update_data(applied_promo_code=None)
+    
+    plan = await repo.get_plan(plan_id)
+    if plan is None or not plan.is_active:
+        await call.answer(_("plan_not_found"), show_alert=True)
+        return
+    node_id = getattr(call.bot, "node_id", 0)
+    await adjust_plan_for_reseller(plan, call.from_user.id, node_id)
+    await _show_bulk_checkout_methods(call, plan, qty, state, _)
+
+
+@router.message(CheckoutStates.awaiting_promo_code, F.text)
+async def user_promo_code_handler(message: Message, state: FSMContext, _: Callable[[str], str]) -> None:
+    code_text = message.text.strip().upper()
+    data = await state.get_data()
+    plan_id = data.get("plan_id")
+    bulk_qty = data.get("bulk_qty")
+    
+    if code_text == "/CANCEL":
+        await state.set_state(None) # clear state but keep plan_id in data
+        if bulk_qty:
+            plan = await repo.get_plan(plan_id)
+            node_id = getattr(message.bot, "node_id", 0)
+            await adjust_plan_for_reseller(plan, message.from_user.id, node_id)
+            await _show_bulk_checkout_methods_new_message(message, plan, bulk_qty, state, _)
+        else:
+            await _show_plan_details(message, plan_id, state, _)
+        return
+        
+    node_id = getattr(message.bot, "node_id", 0)
+    promo = await repo.get_promo_code_by_code(code_text, node_id=node_id)
+    
+    if promo is None or not promo.is_active:
+        await message.answer(_("promo_not_found"))
+        return
+        
+    if promo.expiry_time and promo.expiry_time < int(time.time() * 1000):
+        await message.answer(_("promo_expired"))
+        return
+        
+    if promo.max_uses is not None and promo.used_count >= promo.max_uses:
+        await message.answer(_("promo_max_used"))
+        return
+        
+    if await repo.has_user_used_promo(message.from_user.id, promo.code, node_id=node_id):
+        await message.answer(_("promo_already_used"))
+        return
+        
+    # Promo is valid! Save in FSM
+    await state.update_data(applied_promo_code=promo.code)
+    await state.set_state(None)
+    
+    plan = await repo.get_plan(plan_id)
+    await adjust_plan_for_reseller(plan, message.from_user.id, node_id)
+    
+    discount_amount = adjust_plan_for_promo(plan, promo)
+    if bulk_qty:
+        discount_amount *= bulk_qty
+        
+    from bot.config import get_settings
+    cur = get_settings().fiat_currency
+    
+    await message.answer(
+        _("promo_applied", code=promo.code, discount=f"{int(discount_amount):,} {cur}")
+    )
+    
+    if bulk_qty:
+        await _show_bulk_checkout_methods_new_message(message, plan, bulk_qty, state, _)
+    else:
+        await _show_plan_details(message, plan_id, state, _)

@@ -170,6 +170,10 @@ async def fulfill_order(bot: Bot, order: Order) -> bool:
             return False
 
         await repo.set_order_status(order.id, OrderStatus.paid)
+        if order.promo_code:
+            promo = await repo.get_promo_code_by_code(order.promo_code, node_id=node_id)
+            if promo:
+                await repo.increment_promo_use(promo.id)
         user = await repo.get_user(order.user_tg_id)
         lang = user.lang if user and user.lang else "en"
         _ = partial(get_text, lang)

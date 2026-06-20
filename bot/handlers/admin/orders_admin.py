@@ -42,12 +42,14 @@ async def pending_orders(call: CallbackQuery, bot: Bot) -> None:
         kb.adjust(2)
         qty = getattr(order, "quantity", 1) or 1
         qty_line = f"Quantity: {qty}\n" if qty > 1 else ""
+        promo_line = f"🎟 Promo Code: <b>{order.promo_code}</b> (-{int(order.discount_amount):,} {order.currency})\n" if order.promo_code else ""
         caption = (
             f"🧾 Order #{order.id}\n"
             f"User: <code>{order.user_tg_id}</code>\n"
             f"Plan: {plan.title if plan else '?'}\n"
             f"{qty_line}"
-            f"Amount: {int(order.amount):,} {order.currency}"
+            f"Amount: {int(order.amount):,} {order.currency}\n"
+            f"{promo_line}"
         )
         if order.receipt_file_id:
             await bot.send_photo(

@@ -5,7 +5,7 @@ from typing import List, Sequence
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.db.models import Panel, Plan
+from bot.db.models import Panel, Plan, PromoCode
 from bot.panel.schemas import InboundOption
 
 
@@ -21,6 +21,7 @@ def admin_menu_kb(node_id: int = 0) -> InlineKeyboardMarkup:
     builder.button(text="🧾 Pending Receipts", callback_data="adm:orders")
     builder.button(text="👤 Manage Service", callback_data="adm:users")
     builder.button(text="📣 Broadcast", callback_data="adm:broadcast")
+    builder.button(text="🎟 Promo Codes", callback_data="adm:promos")
     if node_id == 0:
         builder.button(text="⚙️ Settings", callback_data="adm:settings")
     else:
@@ -254,3 +255,32 @@ def plan_addon_pricing_kb(plan: Plan, addon_type: str) -> InlineKeyboardMarkup:
     builder.button(text="⬅️ Back", callback_data=f"adm:pedit:{plan.id}")
     builder.adjust(1)
     return builder.as_markup()
+
+
+def admin_promos_kb(promos: List[PromoCode]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for promo in promos:
+        flag = "🟢" if promo.is_active else "⚪️"
+        type_str = "%" if promo.discount_type == "percentage" else ""
+        builder.button(
+            text=f"{flag} {promo.code} ({int(promo.discount_value)}{type_str})",
+            callback_data=f"adm:promo:{promo.id}"
+        )
+    builder.button(text="➕ New Promo", callback_data="adm:promo:new")
+    builder.button(text="⬅️ Back", callback_data="adm:menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def admin_promo_detail_kb(promo: PromoCode) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✏️ Edit Code", callback_data=f"adm:prmedit:{promo.id}:code")
+    builder.button(text="💰 Edit Value", callback_data=f"adm:prmedit:{promo.id}:value")
+    builder.button(text="🔄 Toggle Type", callback_data=f"adm:promo:type:{promo.id}")
+    toggle = "Disable" if promo.is_active else "Enable"
+    builder.button(text=f"🔁 {toggle}", callback_data=f"adm:promo:toggle:{promo.id}")
+    builder.button(text="🗑 Delete", callback_data=f"adm:promo:del:{promo.id}")
+    builder.button(text="⬅️ Back", callback_data="adm:promos")
+    builder.adjust(2)
+    return builder.as_markup()
+

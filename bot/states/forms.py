@@ -8,6 +8,7 @@ class CheckoutStates(StatesGroup):
     entering_extra_gb = State()
     entering_extra_days = State()
     awaiting_bulk_qty = State()
+    awaiting_promo_code = State()
 
 
 class PlanForm(StatesGroup):
@@ -78,3 +79,16 @@ class BackupSettingsForm(StatesGroup):
 
 class SettingsForm(StatesGroup):
     value = State()
+
+
+class PromoCodeForm(StatesGroup):
+    code = State()
+    discount_type = State()
+    discount_value = State()
+    max_uses = State()
+    expiry_days = State()
+
+
+class EditPromoCodeForm(StatesGroup):
+    value = State()
+

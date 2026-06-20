@@ -22,6 +22,7 @@ from bot.handlers.admin import (
     users_admin,
     resellers_admin,
     income_admin,
+    promo_admin,
 )
 from bot.handlers.user import balance, checkout, myservices, plans, start, freetrial, reseller_panel
 from bot.middlewares import ActiveBotMiddleware, BannedMiddleware, I18nMiddleware, ThrottlingMiddleware, DeduplicationMiddleware
@@ -71,6 +72,7 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(admin_broadcast.router)
     dp.include_router(resellers_admin.router)
     dp.include_router(income_admin.router)
+    dp.include_router(promo_admin.router)
 
     # User routers
     dp.include_router(start.router)

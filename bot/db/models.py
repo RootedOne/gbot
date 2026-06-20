@@ -218,6 +218,8 @@ class Order(Base):
 
     provider_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     receipt_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    promo_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    discount_amount: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[int] = mapped_column(BigInteger, default=_now_ms)
     updated_at: Mapped[int] = mapped_column(BigInteger, default=_now_ms, onupdate=_now_ms)
 
@@ -290,3 +292,19 @@ class Setting(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
+
+
+class PromoCode(Base):
+    __tablename__ = "promo_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    node_id: Mapped[int] = mapped_column(Integer, default=0) # 0 for main, reseller bot id otherwise
+    code: Mapped[str] = mapped_column(String(64), index=True)
+    discount_type: Mapped[str] = mapped_column(String(16), default="percentage") # 'percentage' or 'fixed'
+    discount_value: Mapped[float] = mapped_column(Float, default=0.0)
+    max_uses: Mapped[Optional[int]] = mapped_column(Integer, nullable=True) # None = unlimited
+    used_count: Mapped[int] = mapped_column(Integer, default=0)
+    expiry_time: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True) # ms epoch
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, default=_now_ms)
+

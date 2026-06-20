@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 from bot.config import get_settings
-from bot.db.models import PaymentMethod, Plan
+from bot.db.models import PaymentMethod, Plan, PromoCode
 
 
 def available_methods(plan: Plan) -> List[PaymentMethod]:
@@ -77,4 +77,20 @@ async def adjust_plan_for_reseller(plan: Plan, user_tg_id: int, node_id: int = 0
             plan.price_fiat = reseller_price
             plan.price_stars = 0
             plan.price_usd = 0.0
+
+
+def adjust_plan_for_promo(plan: Plan, promo: PromoCode) -> float:
+    """Mutate plan prices in memory based on the promo code. Returns the discount amount in fiat."""
+    discount_amount = 0.0
+    if promo.discount_type == "percentage":
+        factor = 1.0 - (promo.discount_value / 100.0)
+        discount_amount = float(plan.price_fiat) * (promo.discount_value / 100.0)
+        plan.price_fiat = max(0.0, float(plan.price_fiat) * factor)
+        plan.price_usd = max(0.0, float(plan.price_usd) * factor)
+        plan.price_stars = max(0, int(plan.price_stars * factor))
+    else:
+        discount_amount = min(float(plan.price_fiat), promo.discount_value)
+        plan.price_fiat = max(0.0, float(plan.price_fiat) - promo.discount_value)
+    return discount_amount
+
 
