@@ -92,3 +92,13 @@ class PromoCodeForm(StatesGroup):
 class EditPromoCodeForm(StatesGroup):
     value = State()
 
+
+class CustomPackageForm(StatesGroup):
+    target_id = State()
+    plan_id = State()
+    traffic_gb = State()
+    duration_days = State()
+    limit_ip = State()
+    confirm = State()
+
+

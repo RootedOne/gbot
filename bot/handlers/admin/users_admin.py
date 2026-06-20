@@ -16,7 +16,7 @@ from bot.filters import IsAdmin
 from bot.keyboards.admin_kb import admin_menu_kb
 from bot.services import provisioning
 from bot.services.delivery import send_configs
-from bot.states.forms import AdminUserForm
+from bot.states.forms import AdminUserForm, CustomPackageForm
 from bot.utils.format import fmt_expiry, fmt_quota, human_bytes
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,7 @@ async def users_entry(call: CallbackQuery, state: FSMContext) -> None:
     kb.button(text="📜 User history (by ID)", callback_data="adm:users:history")
     kb.button(text="🔍 Find service by email", callback_data="adm:users:find")
     kb.button(text="🎁 Grant service to user", callback_data="adm:users:create")
+    kb.button(text="📦 Grant Custom Package", callback_data="adm:users:custom_package")
     kb.button(text="💰 Adjust balance", callback_data="adm:users:balance")
     kb.button(text="⬅️ Back", callback_data="adm:menu")
     kb.adjust(1)
@@ -582,3 +583,265 @@ async def grant_plan(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
         logger.exception("grant failed: %s", exc)
         await call.message.answer(f"⚠️ Grant failed: {exc}")
     await call.answer()
+
+
+# --------------------------- custom package grant FSM ---------------------------
+
+@router.callback_query(F.data == "adm:users:custom_package")
+async def custom_pkg_start(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(CustomPackageForm.target_id)
+    await call.message.answer(
+        "👤 Send the target **Telegram user ID** to grant a custom package to:"
+    )
+    await call.answer()
+
+
+@router.message(CustomPackageForm.target_id)
+async def custom_pkg_target(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer("Please send a numeric Telegram user ID.")
+        return
+    await state.update_data(target_id=int(text))
+    await state.set_state(CustomPackageForm.plan_id)
+    
+    plans = await repo.list_plans(only_active=False)
+    if not plans:
+        await state.clear()
+        await message.answer("No plans exist yet. Create a plan first to define inbounds/panel config.")
+        return
+    
+    kb = InlineKeyboardBuilder()
+    for plan in plans:
+        kb.button(text=plan.title, callback_data=f"admcustompkg:{plan.id}")
+    kb.adjust(1)
+    await message.answer(
+        "Choose a base plan (this will define the panel and inbounds config):",
+        reply_markup=kb.as_markup()
+    )
+
+
+@router.callback_query(CustomPackageForm.plan_id, F.data.startswith("admcustompkg:"))
+async def custom_pkg_plan(call: CallbackQuery, state: FSMContext) -> None:
+    plan_id = int(call.data.rsplit(":", 1)[1])
+    plan = await repo.get_plan(plan_id)
+    if plan is None:
+        await call.answer("Plan not found.", show_alert=True)
+        return
+    
+    await state.update_data(plan_id=plan_id)
+    await state.set_state(CustomPackageForm.traffic_gb)
+    
+    await call.message.answer(
+        f"Send the custom **traffic in GB** (or 0 for unlimited):\n"
+        f"_(Suggested default from plan: {plan.traffic_gb} GB)_"
+    )
+    await call.answer()
+
+
+@router.message(CustomPackageForm.traffic_gb)
+async def custom_pkg_traffic(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer("Please send a valid numeric value for traffic.")
+        return
+    traffic = int(text)
+    
+    data = await state.get_data()
+    plan_id = data.get("plan_id")
+    plan = await repo.get_plan(plan_id)
+    if plan is None:
+        await state.clear()
+        await message.answer("Session expired. Please restart.")
+        return
+
+    await state.update_data(traffic_gb=traffic)
+    await state.set_state(CustomPackageForm.duration_days)
+    await message.answer(
+        f"Send the custom **duration in days** (or 0 for never expires):\n"
+        f"_(Suggested default from plan: {plan.duration_days} days)_"
+    )
+
+
+@router.message(CustomPackageForm.duration_days)
+async def custom_pkg_duration(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer("Please send a valid numeric value for duration.")
+        return
+    duration = int(text)
+    
+    data = await state.get_data()
+    plan_id = data.get("plan_id")
+    plan = await repo.get_plan(plan_id)
+    if plan is None:
+        await state.clear()
+        await message.answer("Session expired. Please restart.")
+        return
+
+    await state.update_data(duration_days=duration)
+    await state.set_state(CustomPackageForm.limit_ip)
+    await message.answer(
+        f"Send the custom **IP/device limit** (or 0 for unlimited):\n"
+        f"_(Suggested default from plan: {plan.limit_ip})_"
+    )
+
+
+@router.message(CustomPackageForm.limit_ip)
+async def custom_pkg_limit_ip(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        await message.answer("Please send a valid numeric value for IP limit.")
+        return
+    limit = int(text)
+    
+    await state.update_data(limit_ip=limit)
+    await state.set_state(CustomPackageForm.confirm)
+    
+    data = await state.get_data()
+    target_id = data.get("target_id")
+    plan_id = data.get("plan_id")
+    traffic = data.get("traffic_gb")
+    duration = data.get("duration_days")
+    
+    plan = await repo.get_plan(plan_id)
+    if plan is None:
+        await state.clear()
+        await message.answer("Session expired. Please restart.")
+        return
+    
+    panel_name = "—"
+    if plan.panel_id:
+        panel = await repo.get_panel(plan.panel_id)
+        if panel:
+            panel_name = panel.name
+
+    node_id = getattr(message.bot, "node_id", 0)
+    is_reseller = (node_id > 0)
+    
+    cost_text = ""
+    if is_reseller:
+        node = await repo.get_node(node_id)
+        reseller_tg_id = node.owner_tg_id if node else 0
+        if traffic == 0:
+            price = await repo.get_reseller_unlimited_price(reseller_tg_id, plan.panel_id)
+        else:
+            gb_price = await repo.get_reseller_gb_price(reseller_tg_id, plan.panel_id)
+            price = float(traffic * gb_price)
+        cost_text = f"\n💰 **Reseller Cost**: {int(price):,} tomans"
+        await state.update_data(cost=price, reseller_tg_id=reseller_tg_id)
+
+    lines = [
+        "📦 **Confirm Custom Package Details**",
+        "",
+        f"👤 **Target User ID**: <code>{target_id}</code>",
+        f"🖥 **Server / Panel**: {panel_name}",
+        f"🔌 **Inbounds**: {plan.inbound_ids or '—'}",
+        f"📦 **Traffic**: {f'{traffic} GB' if traffic > 0 else 'Unlimited'}",
+        f"⏳ **Duration**: {f'{duration} Days' if duration > 0 else 'Never expires'}",
+        f"📱 **IP Device Limit**: {limit if limit > 0 else 'Unlimited'}",
+        cost_text,
+        "",
+        "Confirm creation and provisioning?"
+    ]
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Confirm", callback_data="admcustompkg:confirm")
+    kb.button(text="❌ Cancel", callback_data="admcustompkg:cancel")
+    kb.adjust(2)
+    
+    await message.answer("\n".join(lines), reply_markup=kb.as_markup())
+
+
+@router.callback_query(CustomPackageForm.confirm, F.data == "admcustompkg:cancel")
+async def custom_pkg_confirm_cancel(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    node_id = getattr(call.bot, "node_id", 0)
+    await call.message.edit_text("❌ Custom package creation cancelled.", reply_markup=admin_menu_kb(node_id))
+    await call.answer()
+
+
+@router.callback_query(CustomPackageForm.confirm, F.data == "admcustompkg:confirm")
+async def custom_pkg_confirm_ok(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    data = await state.get_data()
+    await state.clear()
+    
+    target_id = data.get("target_id")
+    plan_id = data.get("plan_id")
+    traffic = data.get("traffic_gb")
+    duration = data.get("duration_days")
+    limit = data.get("limit_ip")
+    cost = data.get("cost", 0.0)
+    reseller_tg_id = data.get("reseller_tg_id")
+    
+    plan = await repo.get_plan(plan_id)
+    if plan is None or target_id is None:
+        await call.answer("Session expired or invalid data.", show_alert=True)
+        return
+        
+    node_id = getattr(bot, "node_id", 0)
+    is_reseller = (node_id > 0)
+    
+    if is_reseller and reseller_tg_id:
+        reseller = await repo.get_user(reseller_tg_id, 0)
+        if not reseller or reseller.balance < cost:
+            await call.message.edit_text(
+                f"❌ **Fulfillment failed**: Insufficient reseller balance.\n"
+                f"Required cost: <b>{int(cost):,} tomans</b>.\n"
+                f"Your balance: <b>{int(reseller.balance if reseller else 0):,} tomans</b>."
+            )
+            await call.answer()
+            return
+            
+        # Deduct reseller balance
+        await repo.adjust_balance(
+            tg_id=reseller_tg_id,
+            amount=-cost,
+            reason=f"Reseller custom package grant to {target_id} (traffic: {traffic} GB, days: {duration})",
+            node_id=0
+        )
+    
+    await repo.get_or_create_user(tg_id=target_id)
+    
+    # Create order with method=manual
+    order = await repo.create_order(
+        user_tg_id=target_id,
+        plan_id=plan.id,
+        method=PaymentMethod.manual,
+        amount=cost if is_reseller else 0.0,
+        currency="tomans" if is_reseller else "",
+        status=OrderStatus.paid,
+        node_id=node_id,
+    )
+    
+    # Also set custom package details on order
+    if order:
+        await repo.update_order(order.id, extra_gb=traffic, extra_days=duration)
+
+    try:
+        result = await provisioning.provision_custom_package(
+            target_id, plan, traffic, duration, limit, order_id=order.id
+        )
+        await send_configs(bot, target_id, result, title="You received a custom VPN plan 🎁")
+        await call.message.edit_text(
+            f"✅ **Custom Package Granted!**\n\n"
+            f"User ID: <code>{target_id}</code>\n"
+            f"Email: <code>{result.email}</code>\n"
+            f"Provisioned on panel successfully."
+        )
+    except Exception as exc:
+        logger.exception("Grant custom package failed: %s", exc)
+        # Refund reseller if failed
+        if is_reseller and reseller_tg_id and cost > 0:
+            try:
+                await repo.adjust_balance(
+                    tg_id=reseller_tg_id,
+                    amount=cost,
+                    reason=f"Refund: Provision custom package failed for {target_id}",
+                    node_id=0
+                )
+            except Exception as refund_exc:
+                logger.error("Reseller refund failed: %s", refund_exc)
+        await call.message.edit_text(f"⚠️ Provisioning failed: {exc}")
+    await call.answer()
+

@@ -225,6 +225,50 @@ async def provision_for_plan(
     return ProvisionResult(service=service, links=links, sub_url=sub_url, email=email)
 
 
+async def provision_custom_package(
+    user_tg_id: int,
+    plan: Plan,
+    traffic_gb: int,
+    duration_days: int,
+    limit_ip: int,
+    order_id: Optional[int] = None,
+) -> ProvisionResult:
+    """Create a brand-new VPN client on the panel with custom parameters cloned from a base plan."""
+    panel_row = await _resolve_panel_for_plan(plan)
+    panel = await get_panel_client(panel_row.id)
+    email = make_email(user_tg_id, plan.id)
+    total_bytes = gb_to_bytes(traffic_gb) if traffic_gb else 0
+    expiry = days_from_now_ms(duration_days)
+
+    await panel.add_client(
+        email=email,
+        inbound_ids=list(plan.inbound_ids or []),
+        total_gb_bytes=total_bytes,
+        expiry_time_ms=expiry,
+        tg_id=user_tg_id,
+        limit_ip=limit_ip,
+        enable=True,
+    )
+
+    links, sub_id, sub_url = await _resolve_links_and_sub(panel, panel_row, email)
+
+    node_id = getattr(plan, "node_id", 0)
+    service = await repo.create_service(
+        user_tg_id=user_tg_id,
+        email=email,
+        sub_id=sub_id,
+        inbound_ids=list(plan.inbound_ids or []),
+        total_bytes=total_bytes,
+        expiry_time=expiry,
+        plan_id=None,
+        order_id=order_id,
+        panel_id=panel_row.id,
+        node_id=node_id,
+    )
+
+    return ProvisionResult(service=service, links=links, sub_url=sub_url, email=email)
+
+
 async def provision_trial_service(
     user_tg_id: int,
     panel_id: int,
