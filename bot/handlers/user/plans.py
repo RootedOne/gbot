@@ -106,7 +106,7 @@ async def _show_plan_details(target: Message | CallbackQuery, plan_id: int, stat
         await target.answer(caption, reply_markup=kb)
 
 
-@router.callback_query(F.data.startswith("plan:"))
+@router.callback_query(F.data.regexp(r"^plan:\d+$"))
 async def plan_detail_cb(call: CallbackQuery, state: FSMContext, _: Callable[[str], str]) -> None:
     plan_id = int(call.data.split(":", 1)[1])
     await _show_plan_details(call, plan_id, state, _)
