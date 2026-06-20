@@ -65,6 +65,7 @@ def plan_detail_kb(
     plan: Plan,
     methods: List[PaymentMethod],
     can_pay_with_balance: bool = False,
+    applied_promo: Optional[str] = None,
     _ : Callable[[str], str] = lambda k: k
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -77,6 +78,16 @@ def plan_detail_kb(
             text=_METHOD_LABELS.get(method, method.value),
             callback_data=f"buy:{plan.id}:{method.value}",
         )
+    
+    if applied_promo:
+        builder.button(
+            text=_("btn_applied_promo", code=applied_promo), callback_data=f"plan:promo_clear:{plan.id}"
+        )
+    else:
+        builder.button(
+            text=_("btn_apply_promo"), callback_data=f"plan:promo_apply:{plan.id}"
+        )
+
     builder.button(
         text=_("btn_bulk_buy"), callback_data=f"plan_bulk:{plan.id}"
     )
@@ -103,6 +114,7 @@ def bulk_payment_kb(
     qty: int,
     methods: List[PaymentMethod],
     can_pay_with_balance: bool = False,
+    applied_promo: Optional[str] = None,
     _ : Callable[[str], str] = lambda k: k
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -115,6 +127,16 @@ def bulk_payment_kb(
             text=_METHOD_LABELS.get(method, method.value),
             callback_data=f"bulk_buy:{plan_id}:{qty}:{method.value}",
         )
+        
+    if applied_promo:
+        builder.button(
+            text=_("btn_applied_promo", code=applied_promo), callback_data=f"bulk:promo_clear:{plan_id}:{qty}"
+        )
+    else:
+        builder.button(
+            text=_("btn_apply_promo"), callback_data=f"bulk:promo_apply:{plan_id}:{qty}"
+        )
+        
     builder.button(text=_("btn_back"), callback_data=f"plan_bulk:{plan_id}")
     builder.adjust(1)
     return builder.as_markup()

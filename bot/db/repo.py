@@ -19,6 +19,7 @@ from bot.db.models import (
     Setting,
     ResellerNode,
     ResellerPanelInbound,
+    PromoCode,
 )
 
 
@@ -879,6 +880,93 @@ async def get_income_stats(node_id: Optional[int] = None) -> dict:
             "sources": sources,
             "popular_plans": popular_plans[:5]  # Top 5
         }
+
+
+# ----------------------------- Promo Codes -----------------------------
+
+async def get_promo_code_by_code(code: str, node_id: int = 0) -> Optional[PromoCode]:
+    """Fetch an active promo code by its code string (case-insensitive) for a specific bot node."""
+    async with async_session_factory() as session:
+        stmt = (
+            select(PromoCode)
+            .where(func.lower(PromoCode.code) == func.lower(code))
+            .where(PromoCode.node_id == node_id)
+        )
+        return (await session.execute(stmt)).scalars().first()
+
+
+async def get_promo_code(promo_id: int) -> Optional[PromoCode]:
+    async with async_session_factory() as session:
+        return await session.get(PromoCode, promo_id)
+
+
+async def create_promo_code(**kwargs) -> PromoCode:
+    async with async_session_factory() as session:
+        promo = PromoCode(**kwargs)
+        # Normalize code to uppercase
+        if "code" in kwargs:
+            promo.code = kwargs["code"].upper()
+        session.add(promo)
+        await session.commit()
+        await session.refresh(promo)
+        return promo
+
+
+async def list_promo_codes(node_id: int = 0) -> List[PromoCode]:
+    async with async_session_factory() as session:
+        stmt = (
+            select(PromoCode)
+            .where(PromoCode.node_id == node_id)
+            .order_by(PromoCode.created_at.desc())
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+
+async def update_promo_code(promo_id: int, **kwargs) -> Optional[PromoCode]:
+    async with async_session_factory() as session:
+        promo = await session.get(PromoCode, promo_id)
+        if promo is None:
+            return None
+        for key, value in kwargs.items():
+            if key == "code":
+                value = value.upper()
+            setattr(promo, key, value)
+        await session.commit()
+        await session.refresh(promo)
+        return promo
+
+
+async def delete_promo_code(promo_id: int) -> bool:
+    async with async_session_factory() as session:
+        promo = await session.get(PromoCode, promo_id)
+        if promo is None:
+            return False
+        await session.delete(promo)
+        await session.commit()
+        return True
+
+
+async def increment_promo_use(promo_id: int) -> None:
+    async with async_session_factory() as session:
+        promo = await session.get(PromoCode, promo_id)
+        if promo:
+            promo.used_count += 1
+            await session.commit()
+
+
+async def has_user_used_promo(user_tg_id: int, promo_code: str, node_id: int = 0) -> bool:
+    """Check if a user has already used (or is in the process of paying/reviewing) a specific promo code."""
+    async with async_session_factory() as session:
+        stmt = (
+            select(func.count(Order.id))
+            .where(Order.user_tg_id == user_tg_id)
+            .where(Order.node_id == node_id)
+            .where(func.lower(Order.promo_code) == func.lower(promo_code))
+            .where(Order.status.in_([OrderStatus.paid, OrderStatus.awaiting_review]))
+        )
+        count = (await session.execute(stmt)).scalar() or 0
+        return count > 0
+
 
 
 

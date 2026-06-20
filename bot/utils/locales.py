@@ -94,7 +94,16 @@ LOCALES: Dict[str, Dict[str, str]] = {
         "no_trial_servers": "⚠️ Sorry, there are no trial servers available right now.",
         
         "lang_selected": "Language changed to English.",
-        "select_language": "Please select your language:"
+        "select_language": "Please select your language:",
+        "btn_apply_promo": "🎟 Apply Promo Code",
+        "btn_applied_promo": "🎟 Promo Code: {code}",
+        "enter_promo_code": "🎟 Please send the promo code to apply:\n(Or send /cancel to go back)",
+        "promo_applied": "✅ Promo code <b>{code}</b> applied successfully! You received a <b>{discount}</b> discount.",
+        "promo_not_found": "❌ Invalid promo code.",
+        "promo_expired": "❌ This promo code has expired.",
+        "promo_max_used": "❌ This promo code usage limit has been reached.",
+        "promo_already_used": "❌ You have already used this promo code.",
+        "promo_discount_line": "\n🎟 Promo Code: <b>{code}</b> (-{discount})"
     },
     "fa": {
         "btn_buy_plan": "🛒 خرید سرویس",
@@ -189,7 +198,16 @@ LOCALES: Dict[str, Dict[str, str]] = {
         "no_trial_servers": "⚠️ متاسفانه در حال حاضر هیچ سرور تستی در دسترس نیست.",
         
         "lang_selected": "زبان به فارسی تغییر یافت.",
-        "select_language": "لطفا زبان خود را انتخاب کنید:\nPlease select your language:"
+        "select_language": "لطفا زبان خود را انتخاب کنید:\nPlease select your language:",
+        "btn_apply_promo": "🎟 ثبت کد تخفیف",
+        "btn_applied_promo": "🎟 کد تخفیف ثبت شده: {code}",
+        "enter_promo_code": "🎟 لطفا کد تخفیف خود را ارسال کنید:\n(یا /cancel را برای انصراف بفرستید)",
+        "promo_applied": "✅ کد تخفیف <b>{code}</b> با موفقیت ثبت شد! شما <b>{discount}</b> تخفیف دریافت کردید.",
+        "promo_not_found": "❌ کد تخفیف نامعتبر است.",
+        "promo_expired": "❌ این کد تخفیف منقضی شده است.",
+        "promo_max_used": "❌ ظرفیت استفاده از این کد تخفیف به پایان رسیده است.",
+        "promo_already_used": "❌ شما قبلاً از این کد تخفیف استفاده کرده‌اید.",
+        "promo_discount_line": "\n🎟 کد تخفیف: <b>{code}</b> ({discount}-)"
     }
 }
 

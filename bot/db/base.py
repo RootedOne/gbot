@@ -43,7 +43,9 @@ _SQLITE_COLUMN_MIGRATIONS = {
         ("node_id", "INTEGER NOT NULL DEFAULT 0"),
         ("extra_gb", "FLOAT"),
         ("extra_days", "INTEGER"),
-        ("quantity", "INTEGER NOT NULL DEFAULT 1")
+        ("quantity", "INTEGER NOT NULL DEFAULT 1"),
+        ("promo_code", "VARCHAR(64)"),
+        ("discount_amount", "FLOAT NOT NULL DEFAULT 0")
     ],
     "plans": [
         ("panel_id", "INTEGER"),
