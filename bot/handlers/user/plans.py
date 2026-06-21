@@ -155,7 +155,7 @@ async def bulk_qty_select_cb(call: CallbackQuery, state: FSMContext, _: Callable
         return
         
     qty = int(qty_str)
-    await _show_bulk_checkout_methods(call, plan, qty, _)
+    await _show_bulk_checkout_methods(call, plan, qty, state, _)
 
 
 async def _show_bulk_checkout_methods(call: CallbackQuery, plan: Plan, qty: int, state: FSMContext, _: Callable[[str], str]) -> None:
@@ -240,7 +240,7 @@ async def custom_bulk_qty_handler(message: Message, state: FSMContext, _: Callab
     node_id = getattr(message.bot, "node_id", 0)
     await adjust_plan_for_reseller(plan, message.from_user.id, node_id)
         
-    await _show_bulk_checkout_methods_new_message(message, plan, qty, _)
+    await _show_bulk_checkout_methods_new_message(message, plan, qty, state, _)
 
 
 async def _show_bulk_checkout_methods_new_message(message: Message, plan: Plan, qty: int, state: FSMContext, _: Callable[[str], str]) -> None:

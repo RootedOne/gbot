@@ -696,6 +696,22 @@ async def custom_pkg_limit_ip(message: Message, state: FSMContext) -> None:
     limit = int(text)
     
     await state.update_data(limit_ip=limit)
+    await state.set_state(CustomPackageForm.quantity)
+    await message.answer(
+        "Send the custom **quantity** of packages to create:\n"
+        "_(Suggested default: 1)_"
+    )
+
+
+@router.message(CustomPackageForm.quantity)
+async def custom_pkg_quantity(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text.isdigit() or int(text) <= 0:
+        await message.answer("Please send a valid numeric quantity greater than 0.")
+        return
+    qty = int(text)
+    
+    await state.update_data(quantity=qty)
     await state.set_state(CustomPackageForm.confirm)
     
     data = await state.get_data()
@@ -703,6 +719,7 @@ async def custom_pkg_limit_ip(message: Message, state: FSMContext) -> None:
     plan_id = data.get("plan_id")
     traffic = data.get("traffic_gb")
     duration = data.get("duration_days")
+    limit = data.get("limit_ip")
     
     plan = await repo.get_plan(plan_id)
     if plan is None:
@@ -724,12 +741,16 @@ async def custom_pkg_limit_ip(message: Message, state: FSMContext) -> None:
         node = await repo.get_node(node_id)
         reseller_tg_id = node.owner_tg_id if node else 0
         if traffic == 0:
-            price = await repo.get_reseller_unlimited_price(reseller_tg_id, plan.panel_id)
+            price_single = await repo.get_reseller_unlimited_price(reseller_tg_id, plan.panel_id)
         else:
             gb_price = await repo.get_reseller_gb_price(reseller_tg_id, plan.panel_id)
-            price = float(traffic * gb_price)
-        cost_text = f"\n💰 **Reseller Cost**: {int(price):,} tomans"
-        await state.update_data(cost=price, reseller_tg_id=reseller_tg_id)
+            price_single = float(traffic * gb_price)
+        total_price = price_single * qty
+        cost_text = (
+            f"\n💰 **Reseller Cost per package**: {int(price_single):,} tomans"
+            f"\n💵 **Total Reseller Cost ({qty}x)**: {int(total_price):,} tomans"
+        )
+        await state.update_data(cost=total_price, reseller_tg_id=reseller_tg_id)
 
     lines = [
         "📦 **Confirm Custom Package Details**",
@@ -740,6 +761,7 @@ async def custom_pkg_limit_ip(message: Message, state: FSMContext) -> None:
         f"📦 **Traffic**: {f'{traffic} GB' if traffic > 0 else 'Unlimited'}",
         f"⏳ **Duration**: {f'{duration} Days' if duration > 0 else 'Never expires'}",
         f"📱 **IP Device Limit**: {limit if limit > 0 else 'Unlimited'}",
+        f"🔢 **Quantity**: {qty}",
         cost_text,
         "",
         "Confirm creation and provisioning?"
@@ -753,7 +775,8 @@ async def custom_pkg_limit_ip(message: Message, state: FSMContext) -> None:
     await message.answer("\n".join(lines), reply_markup=kb.as_markup())
 
 
-@router.callback_query(CustomPackageForm.confirm, F.data == "admcustompkg:cancel")
+
+@router.callback_query(F.data == "admcustompkg:cancel")
 async def custom_pkg_confirm_cancel(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     node_id = getattr(call.bot, "node_id", 0)
@@ -761,7 +784,7 @@ async def custom_pkg_confirm_cancel(call: CallbackQuery, state: FSMContext) -> N
     await call.answer()
 
 
-@router.callback_query(CustomPackageForm.confirm, F.data == "admcustompkg:confirm")
+@router.callback_query(F.data == "admcustompkg:confirm")
 async def custom_pkg_confirm_ok(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
     await state.clear()
@@ -771,6 +794,7 @@ async def custom_pkg_confirm_ok(call: CallbackQuery, state: FSMContext, bot: Bot
     traffic = data.get("traffic_gb")
     duration = data.get("duration_days")
     limit = data.get("limit_ip")
+    quantity = data.get("quantity", 1)
     cost = data.get("cost", 0.0)
     reseller_tg_id = data.get("reseller_tg_id")
     
@@ -793,11 +817,11 @@ async def custom_pkg_confirm_ok(call: CallbackQuery, state: FSMContext, bot: Bot
             await call.answer()
             return
             
-        # Deduct reseller balance
+        # Deduct reseller balance (total cost)
         await repo.adjust_balance(
             tg_id=reseller_tg_id,
             amount=-cost,
-            reason=f"Reseller custom package grant to {target_id} (traffic: {traffic} GB, days: {duration})",
+            reason=f"Reseller custom package grant to {target_id} (qty: {quantity}, traffic: {traffic} GB, days: {duration})",
             node_id=0
         )
     
@@ -812,36 +836,83 @@ async def custom_pkg_confirm_ok(call: CallbackQuery, state: FSMContext, bot: Bot
         currency="tomans" if is_reseller else "",
         status=OrderStatus.paid,
         node_id=node_id,
+        quantity=quantity,
     )
     
     # Also set custom package details on order
     if order:
-        await repo.update_order(order.id, extra_gb=traffic, extra_days=duration)
+        await repo.update_order(order.id, extra_gb=traffic, extra_days=duration, quantity=quantity)
 
-    try:
-        result = await provisioning.provision_custom_package(
-            target_id, plan, traffic, duration, limit, order_id=order.id
-        )
-        await send_configs(bot, target_id, result, title="You received a custom VPN plan 🎁")
-        await call.message.edit_text(
-            f"✅ **Custom Package Granted!**\n\n"
-            f"User ID: <code>{target_id}</code>\n"
-            f"Email: <code>{result.email}</code>\n"
-            f"Provisioned on panel successfully."
-        )
-    except Exception as exc:
-        logger.exception("Grant custom package failed: %s", exc)
-        # Refund reseller if failed
+    # Begin bulk provisioning loop
+    success_count = 0
+    failed_count = 0
+    results = []
+    errors = []
+
+    status_msg = await call.message.edit_text(f"⏳ Provisioning {quantity} custom packages...")
+
+    for idx in range(1, quantity + 1):
+        try:
+            result = await provisioning.provision_custom_package(
+                target_id, plan, traffic, duration, limit, order_id=order.id
+            )
+            title = f"You received a custom VPN plan 🎁 ({idx}/{quantity})" if quantity > 1 else "You received a custom VPN plan 🎁"
+            await send_configs(bot, target_id, result, title=title)
+            results.append(result)
+            success_count += 1
+        except Exception as exc:
+            logger.exception("Grant custom package failed for index %d: %s", idx, exc)
+            errors.append(str(exc))
+            failed_count += 1
+
+    # Check if there are failures to refund reseller
+    refund_text = ""
+    if failed_count > 0:
         if is_reseller and reseller_tg_id and cost > 0:
+            cost_single = cost / quantity
+            refund_amount = cost_single * failed_count
             try:
                 await repo.adjust_balance(
                     tg_id=reseller_tg_id,
-                    amount=cost,
-                    reason=f"Refund: Provision custom package failed for {target_id}",
+                    amount=refund_amount,
+                    reason=f"Refund: Provision {failed_count}/{quantity} custom packages failed for {target_id}",
                     node_id=0
                 )
+                refund_text = f"\n💰 **Refunded**: {int(refund_amount):,} tomans for {failed_count} failed packages."
             except Exception as refund_exc:
                 logger.error("Reseller refund failed: %s", refund_exc)
-        await call.message.edit_text(f"⚠️ Provisioning failed: {exc}")
+                refund_text = f"\n⚠️ Refund failed: {refund_exc}"
+
+    if success_count == quantity:
+        emails_str = "\n".join([f"• <code>{r.email}</code>" for r in results])
+        await status_msg.edit_text(
+            f"✅ **Bulk Custom Packages Granted!**\n\n"
+            f"User ID: <code>{target_id}</code>\n"
+            f"Successfully created: **{success_count} / {quantity}**\n\n"
+            f"**Emails:**\n{emails_str}\n\n"
+            f"All configurations provisioned and delivered."
+        )
+    elif success_count > 0:
+        emails_str = "\n".join([f"• <code>{r.email}</code>" for r in results])
+        errors_str = "; ".join(set(errors))
+        await status_msg.edit_text(
+            f"⚠️ **Partial Bulk Custom Package Grant**\n\n"
+            f"User ID: <code>{target_id}</code>\n"
+            f"Successfully created: **{success_count} / {quantity}**\n"
+            f"Failed: **{failed_count} / {quantity}**\n\n"
+            f"**Emails:**\n{emails_str}\n"
+            f"{refund_text}\n\n"
+            f"⚠️ Errors encountered: {errors_str}"
+        )
+    else:
+        errors_str = "; ".join(set(errors))
+        await status_msg.edit_text(
+            f"❌ **Fulfillment failed**\n\n"
+            f"All {quantity} packages failed to provision.\n"
+            f"{refund_text}\n\n"
+            f"⚠️ Errors: {errors_str}"
+        )
+
     await call.answer()
+
 

@@ -335,6 +335,19 @@ async def set_order_status(
         return order
 
 
+async def update_order(order_id: int, **kwargs) -> Optional[Order]:
+    async with async_session_factory() as session:
+        order = await session.get(Order, order_id)
+        if order is None:
+            return None
+        for key, value in kwargs.items():
+            setattr(order, key, value)
+        await session.commit()
+        await session.refresh(order)
+        return order
+
+
+
 async def get_order_by_provider_ref(provider_ref: str) -> Optional[Order]:
     async with async_session_factory() as session:
         stmt = select(Order).where(Order.provider_ref == provider_ref)

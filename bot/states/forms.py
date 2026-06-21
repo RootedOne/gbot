@@ -99,6 +99,7 @@ class CustomPackageForm(StatesGroup):
     traffic_gb = State()
     duration_days = State()
     limit_ip = State()
+    quantity = State()
     confirm = State()
 
 
